@@ -1,0 +1,22 @@
+body {
+    background-color: #222132;
+    color: #86cfea;
+}
+
+.btn {
+    background-color: #1e5c58;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+
+    display: inline-block;
+    text-decoration: none;
+    user-select: none;
+    transition: background-color 0.3s ease;
+}
+
+.btn:hover {
+    background-color: #1a4b4c;
+}
