@@ -1264,7 +1264,7 @@ dependencies = [
 [[package]]
 name = "sparkles-core"
 version = "0.1.8"
-source = "git+https://github.com/skibon02/sparkles.git?branch=main#5ce6a27bd5c59d2fd38451dc4fd80c3258897fba"
+source = "git+https://github.com/skibon02/sparkles.git?branch=main#cf3ab58e312412fd725b3e1abbbc33ee17802a8b"
 dependencies = [
  "bincode",
  "enumset",
@@ -1286,6 +1286,8 @@ dependencies = [
  "serde",
  "serde_json",
  "simple_logger",
+ "slab",
+ "smallvec",
  "sparkles-parser",
  "strum",
  "tokio",
@@ -1296,7 +1298,7 @@ dependencies = [
 [[package]]
 name = "sparkles-macro"
 version = "0.1.6"
-source = "git+https://github.com/skibon02/sparkles.git?branch=main#5ce6a27bd5c59d2fd38451dc4fd80c3258897fba"
+source = "git+https://github.com/skibon02/sparkles.git?branch=main#cf3ab58e312412fd725b3e1abbbc33ee17802a8b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1306,7 +1308,7 @@ dependencies = [
 [[package]]
 name = "sparkles-parser"
 version = "0.1.1"
-source = "git+https://github.com/skibon02/sparkles.git?branch=main#5ce6a27bd5c59d2fd38451dc4fd80c3258897fba"
+source = "git+https://github.com/skibon02/sparkles.git?branch=main#cf3ab58e312412fd725b3e1abbbc33ee17802a8b"
 dependencies = [
  "bincode",
  "chrono",

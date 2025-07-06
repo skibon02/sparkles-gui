@@ -1,9 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::iter::Sum;
+use std::ops::{Add, AddAssign};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use axum::response::sse::Event;
 use log::{error, info};
+use serde::Serialize;
+use slab::Slab;
+use smallvec::SmallVec;
 use sparkles_parser::parsed::ParsedEvent;
 use sparkles_parser::TracingEventId;
 use tokio::sync::mpsc::Receiver;
@@ -23,6 +28,7 @@ pub fn spawn(shared_data: SharedDataWrapper, client_msg_rx: Receiver<MessageFrom
 
 pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<MessageFromClient>) -> anyhow::Result<()> {
     let mut active_connections = HashMap::new();
+    let mut active_ranges_requests = Slab::new();
     loop {
         // Handle messages from the cwient
         if let Ok(msg) = client_msg_rx.try_recv() {
@@ -48,11 +54,39 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
                         sparkles_connection::connect(addr, msg_tx);
                     });
                 }
-                MessageFromClient::RequestNewRange {
+                MessageFromClient::RequestNewEvents {
                     start,
                     end,
                     resp
                 } => {
+                    active_ranges_requests.insert((resp, start, end));
+                }
+                MessageFromClient::GetEventNames {
+                    addr,
+                    thread,
+                    resp
+                } => {
+                    if let Some(storage) = active_connections.get(&addr) {
+                        if let Some(event_storage) = storage.thread_events.get(&thread) {
+                            let event_names = event_storage.event_names.clone();
+                            let _ = resp.send(event_names);
+                        }
+                    }
+                }
+                MessageFromClient::GetThreadNames {
+                    addr,
+                    resp
+                } => {
+                    if let Some(storage) = active_connections.get(&addr) {
+                        let _ = resp.send(storage.thread_names.clone());
+                    }
+                }
+                MessageFromClient::GetStorageStats {
+                    resp
+                } => {
+                    let res = active_connections.values().map(|v| v.get_storage_stats())
+                        .sum();
+                    let _ = resp.send(res);
                 }
             }
         }
@@ -65,22 +99,50 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
         // Handle incoming events
         let mut closed_connections = vec![];
         for (addr, storage) in active_connections.iter_mut() {
+            let Some(msg_rx) = storage.msg_rx.as_mut() else {
+                continue;
+            };
             loop {
-                match storage.msg_rx.try_recv() {
+                match msg_rx.try_recv() {
                     Ok(msg) => {
                         match msg {
-                            sparkles_connection::SparklesConnectionMessage::Events { thread_ord_id, events } => {
-                                // info!("Received {} events from thread {}", events.len(), thread_ord_id);
-                                // Process events and store them
+                            SparklesConnectionMessage::Events { thread_ord_id, events } => {
+                                let storage = storage.thread_events
+                                    .entry(thread_ord_id)
+                                    .or_default();
+
                                 for event in events {
-                                    // Here you can store the event in your storage
-                                    // For example, you can push it to a vector or a database
+                                    match event {
+                                        ParsedEvent::Instant {
+                                            tm,
+                                            name_id
+                                        } => {
+                                            storage.instant_events.insert(tm, name_id);
+                                        }
+                                        ParsedEvent::Range {
+                                            start,
+                                            end,
+                                            name_id,
+                                            end_name_id,
+                                        } => {
+                                            match storage.range_events_starts.entry(start) {
+                                                std::collections::btree_map::Entry::Vacant(entry) => {
+                                                    let mut vec = SmallVec::new();
+                                                    vec.push(storage.range_events.insert((start, name_id)));
+                                                    entry.insert(vec);
+                                                }
+                                                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                                                    entry.get_mut().push(storage.range_events.insert((start, name_id)));
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                            sparkles_connection::SparklesConnectionMessage::UpdateThreadName { thread_ord_id, thread_name } => {
+                            SparklesConnectionMessage::UpdateThreadName { thread_ord_id, thread_name } => {
                                 storage.thread_names.insert(thread_ord_id, thread_name.clone());
                             }
-                            sparkles_connection::SparklesConnectionMessage::UpdateEventNames { thread_ord_id, event_names } => {
+                            SparklesConnectionMessage::UpdateEventNames { thread_ord_id, event_names } => {
                                 storage.thread_events
                                     .entry(thread_ord_id)
                                     .or_default()
@@ -102,7 +164,8 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
         }
 
         for addr in closed_connections {
-            active_connections.remove(&addr);
+            active_connections.get_mut(&addr).unwrap()
+                .msg_rx = None;
         }
 
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -113,7 +176,17 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
 pub struct ClientStorage {
     thread_events: HashMap<u64, EventStorage>,
     thread_names: HashMap<u64, String>,
-    msg_rx: Receiver<SparklesConnectionMessage>,
+    msg_rx: Option<Receiver<SparklesConnectionMessage>>,
+}
+impl ClientStorage {
+    fn get_storage_stats(&self) -> StorageStats {
+        let mut res = StorageStats::default();
+        for storage in self.thread_events.values() {
+            res.instant_events += storage.instant_events.len();
+            res.range_events += storage.range_events.len();
+        }
+        res
+    }
 }
 
 impl ClientStorage {
@@ -121,12 +194,37 @@ impl ClientStorage {
         Self {
             thread_events: HashMap::new(),
             thread_names: HashMap::new(),
-            msg_rx,
+            msg_rx: Some(msg_rx),
         }
     }
 }
 #[derive(Default)]
 pub struct EventStorage {
     event_names: HashMap<TracingEventId, Arc<str>>,
-    events: Vec<ParsedEvent>,
+
+    instant_events: BTreeMap<u64, TracingEventId>,
+    range_events: Slab<(u64, TracingEventId)>,
+    range_events_starts: BTreeMap<u64, SmallVec<[usize; 2]>>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct StorageStats {
+    instant_events: usize,
+    range_events: usize,
+}
+
+impl Add for StorageStats {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        Self {
+            range_events: self.range_events + other.range_events,
+            instant_events: self.instant_events + other.instant_events,
+        }
+    }
+}
+
+impl Sum for StorageStats {
+    fn sum<I: Iterator<Item=Self>>(iter: I) -> Self {
+        iter.fold(StorageStats::default(), |a, b| a + b)
+    }
 }

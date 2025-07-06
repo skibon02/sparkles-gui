@@ -1,15 +1,21 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
+use futures_util::TryFutureExt;
 use log::{error, info, warn};
+use sparkles_parser::TracingEventId;
 use tokio::sync::mpsc::Sender;
 use tokio::time::interval;
+use crate::tasks::connection_manager::StorageStats;
 use crate::tasks::server::SharedDataWrapper;
 use crate::ws_protocol::{MessageFromServer, MessageToServer};
 
 pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper, client_msg_tx: Sender<MessageFromClient>, client_id: u32) -> anyhow::Result<()> {
     info!("New WebSocket connection: {client_id}");
     let mut send_ticker = interval(Duration::from_secs(2));
+    let mut stats_ticker = interval(Duration::from_millis(500));
 
     let mut event_data_rx_channel = None;
     loop {
@@ -45,7 +51,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
                                             }
                                             else {
                                                 let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(5);
-                                                let msg = MessageFromClient::RequestNewRange {
+                                                let msg = MessageFromClient::RequestNewEvents {
                                                     start,
                                                     end,
                                                     resp: resp_tx,
@@ -96,6 +102,16 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
 
                 let _ = send_websocket(&mut socket, msg).await;
             }
+            _ = stats_ticker.tick() => {
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                let msg = MessageFromClient::GetStorageStats {
+                    resp: resp_tx
+                };
+                client_msg_tx.send(msg).await?;
+                let res = resp_rx.await?;
+                let msg = MessageFromServer::Stats(res);
+                let _ = send_websocket(&mut socket, msg).await;
+            }
         }
     }
 }
@@ -112,9 +128,21 @@ pub enum MessageFromClient {
         addr: SocketAddr,
         resp: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
-    RequestNewRange {
+    RequestNewEvents {
         start: u64,
         end: u64,
         resp: tokio::sync::mpsc::Sender<Vec<u8>>,
     },
+    GetThreadNames {
+        addr: SocketAddr,
+        resp: tokio::sync::oneshot::Sender<HashMap<u64, String>>,
+    },
+    GetEventNames {
+        addr: SocketAddr,
+        thread: u64,
+        resp: tokio::sync::oneshot::Sender<HashMap<TracingEventId, Arc<str>>>,
+    },
+    GetStorageStats {
+        resp: tokio::sync::oneshot::Sender<StorageStats>,
+    }
 }

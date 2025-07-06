@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
+use crate::tasks::connection_manager::StorageStats;
 
 #[derive(Debug, Deserialize)]
 pub enum MessageToServer {
@@ -19,4 +20,5 @@ pub enum MessageFromServer {
         clients: Vec<Vec<SocketAddr>>,
     },
     ConnectError(String),
+    Stats(StorageStats)
 }

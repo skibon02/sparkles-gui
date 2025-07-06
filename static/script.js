@@ -32,6 +32,10 @@ function connect() {
                 });
             }
         }
+        if (msg["Stats"] !== undefined) {
+            el("total-instant-events").innerHTML = msg["Stats"].instant_events;
+            el("total-range-events").innerHTML = msg["Stats"].range_events;
+        }
         console.log("Received:", event.data);
     };
 
