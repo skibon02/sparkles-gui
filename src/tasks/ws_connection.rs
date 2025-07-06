@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
-use futures_util::TryFutureExt;
 use log::{error, info, warn};
 use sparkles_parser::TracingEventId;
 use tokio::sync::mpsc::Sender;
@@ -16,8 +15,11 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
     info!("New WebSocket connection: {client_id}");
     let mut send_ticker = interval(Duration::from_secs(2));
     let mut stats_ticker = interval(Duration::from_millis(500));
+    let mut sync_ticker = interval(Duration::from_secs(1));
 
-    let mut event_data_rx_channel = None;
+    let mut is_channel_registered = false;
+    let (mut dummy_tx, dummy_rx) = tokio::sync::mpsc::channel(1);
+    let mut event_data_rx_channel = dummy_rx;
     loop {
         tokio::select! {
             msg = socket.recv() => {
@@ -46,7 +48,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
                                             }
                                         }
                                         MessageToServer::RequestNewRange { start, end } => {
-                                            if event_data_rx_channel.is_some() {
+                                            if is_channel_registered {
                                                 send_websocket(&mut socket, MessageFromServer::ConnectError("Already waiting for a range".into())).await?;
                                             }
                                             else {
@@ -59,7 +61,9 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
                                                 client_msg_tx.send(msg).await?;
 
                                                 // Register the response channel
-                                                event_data_rx_channel = Some(resp_rx);
+                                                info!("Channel registered!");
+                                                event_data_rx_channel = resp_rx;
+                                                is_channel_registered = true;
                                             }
                                         }
                                     }
@@ -112,6 +116,38 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
                 let msg = MessageFromServer::Stats(res);
                 let _ = send_websocket(&mut socket, msg).await;
             }
+            _ = sync_ticker.tick() => {
+                let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel(5);
+                let msg = MessageFromClient::GetCurrentClientTimestamps {
+                    resp: resp_tx
+                };
+                client_msg_tx.send(msg).await?;
+                while let Some((addr, local_tm, timestamp)) = resp_rx.recv().await {
+                    let elapsed_ns = local_tm.elapsed().as_nanos() as u64;
+                    let msg = MessageFromServer::CurrentClientTimestamp(addr, timestamp + elapsed_ns);
+                    let _ = send_websocket(&mut socket, msg).await;
+                }
+            }
+            res = event_data_rx_channel.recv() => {
+                match res {
+                    Some((addr, thread_ord_id, data)) => {
+                        let msg = MessageFromServer::NewEvents {
+                            addr,
+                            thread_ord_id,
+                            data,
+                        };
+                        let _ = send_websocket(&mut socket, msg).await;
+                    }
+                    None => {
+                        // Channel closed, unregister
+                        is_channel_registered = false;
+                        let (new_dummy_tx, new_dummy_rx) = tokio::sync::mpsc::channel(1);
+                        dummy_tx = new_dummy_tx;
+                        event_data_rx_channel = new_dummy_rx;
+                        info!("Channel unregistered!");
+                    }
+                }
+            }
         }
     }
 }
@@ -131,7 +167,7 @@ pub enum MessageFromClient {
     RequestNewEvents {
         start: u64,
         end: u64,
-        resp: tokio::sync::mpsc::Sender<Vec<u8>>,
+        resp: tokio::sync::mpsc::Sender<(SocketAddr, u64, Vec<u8>)>,
     },
     GetThreadNames {
         addr: SocketAddr,
@@ -144,5 +180,8 @@ pub enum MessageFromClient {
     },
     GetStorageStats {
         resp: tokio::sync::oneshot::Sender<StorageStats>,
+    },
+    GetCurrentClientTimestamps {
+        resp: tokio::sync::mpsc::Sender<(SocketAddr, Instant, u64)>,
     }
 }

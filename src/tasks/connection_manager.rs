@@ -3,7 +3,7 @@ use std::iter::Sum;
 use std::ops::{Add, AddAssign};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use axum::response::sse::Event;
 use log::{error, info};
 use serde::Serialize;
@@ -32,7 +32,6 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
     loop {
         // Handle messages from the cwient
         if let Ok(msg) = client_msg_rx.try_recv() {
-            info!("Connection manager: got message from client: {:?}", msg);
             match msg {
                 MessageFromClient::Connect {
                     addr,
@@ -60,6 +59,7 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
                     resp
                 } => {
                     active_ranges_requests.insert((resp, start, end));
+                    info!("Connection manager: added new range request for start: {}, end: {}", start, end);
                 }
                 MessageFromClient::GetEventNames {
                     addr,
@@ -88,6 +88,29 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
                         .sum();
                     let _ = resp.send(res);
                 }
+                MessageFromClient::GetCurrentClientTimestamps {
+                    resp
+                } => {
+                    for (addr, storage) in active_connections.iter() {
+                        let now = Instant::now();
+                        let mut best_tm = 0;
+                        for (_, thread_storage) in storage.thread_events.iter() {
+                            if let Some((last_sync_time, last_sync_tm)) = thread_storage.last_sync {
+                                // adjust local time
+                                let elapsed = now - last_sync_time;
+                                let elapsed_ns = elapsed.as_nanos() as u64;
+                                let adjusted_tm = last_sync_tm + elapsed_ns;
+                                if adjusted_tm > best_tm {
+                                    best_tm = adjusted_tm;
+                                }
+                            }
+                        }
+
+                        if best_tm != 0 {
+                            resp.send((*addr, now, best_tm)).await?;
+                        }
+                    }
+                }
             }
         }
 
@@ -111,6 +134,17 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
                                     .entry(thread_ord_id)
                                     .or_default();
 
+                                let last_event_tm = events.last();
+                                if let Some(last_event) = last_event_tm {
+                                    match last_event {
+                                        ParsedEvent::Instant { tm, .. } => {
+                                            storage.last_sync = Some((Instant::now(), *tm));
+                                        }
+                                        ParsedEvent::Range { end, .. } => {
+                                            storage.last_sync = Some((Instant::now(), *end));
+                                        }
+                                    }
+                                }
                                 for event in events {
                                     match event {
                                         ParsedEvent::Instant {
@@ -128,11 +162,11 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
                                             match storage.range_events_starts.entry(start) {
                                                 std::collections::btree_map::Entry::Vacant(entry) => {
                                                     let mut vec = SmallVec::new();
-                                                    vec.push(storage.range_events.insert((start, name_id)));
+                                                    vec.push(storage.range_events.insert((end, name_id, end_name_id)));
                                                     entry.insert(vec);
                                                 }
                                                 std::collections::btree_map::Entry::Occupied(mut entry) => {
-                                                    entry.get_mut().push(storage.range_events.insert((start, name_id)));
+                                                    entry.get_mut().push(storage.range_events.insert((end, name_id, end_name_id)));
                                                 }
                                             }
                                         }
@@ -166,6 +200,45 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
         for addr in closed_connections {
             active_connections.get_mut(&addr).unwrap()
                 .msg_rx = None;
+        }
+
+
+        // Handle active range requests
+        let mut closed_ranges = vec![];
+        for (idx, (resp, start, end)) in active_ranges_requests.iter_mut() {
+            // Iterate over addresses
+            for (client_addr, storage) in active_connections.iter() {
+                // Iterate over threads
+                for (thread_ord_id, thread_storage) in storage.thread_events.iter() {
+                    // Encode data
+                    let mut buf = Vec::new();
+
+                    for (tm, id) in thread_storage.request_instant_events(*start, *end) {
+                        buf.extend_from_slice(&tm.to_le_bytes());
+                        buf.push(id);
+                    }
+
+                    for (start, end, start_id, end_id) in thread_storage.request_range_events(*start, *end) {
+                        buf.extend_from_slice(&start.to_le_bytes());
+                        buf.extend_from_slice(&end.to_le_bytes());
+                        buf.push(start_id);
+                        if let Some(end_id) = end_id {
+                            buf.push(end_id);
+                        } else {
+                            buf.push(255); // Use 255 to indicate no end event
+                        }
+                    }
+
+                    info!("Connection manager: sending range request response to {} for thread {}: start={}, end={}, data size={}",
+                        client_addr, thread_ord_id, start, end, buf.len());
+                    resp.send((*client_addr, *thread_ord_id, buf)).await?;
+                }
+            }
+            closed_ranges.push(idx);
+        }
+        for idx in closed_ranges {
+            active_ranges_requests.remove(idx);
+            info!("Connection manager: removed range request for index {}", idx);
         }
 
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -203,8 +276,29 @@ pub struct EventStorage {
     event_names: HashMap<TracingEventId, Arc<str>>,
 
     instant_events: BTreeMap<u64, TracingEventId>,
-    range_events: Slab<(u64, TracingEventId)>,
+    range_events: Slab<(u64, TracingEventId, Option<TracingEventId>)>,
     range_events_starts: BTreeMap<u64, SmallVec<[usize; 2]>>,
+
+    last_sync: Option<(Instant, u64)>,
+}
+
+impl EventStorage {
+    pub fn request_instant_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, TracingEventId)> + '_ {
+        self.instant_events.range(start..end).map(|(tm, name_id)| (*tm, *name_id))
+    }
+
+    pub fn request_range_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>)> + '_ {
+        self.range_events_starts.range(..end).flat_map(move |(start_time, ids)| {
+            ids.iter().filter_map(move |&id| {
+                let (end_time, name_id, end_name_id) = self.range_events.get(id)?;
+                if *start_time < end && *end_time > start {
+                    Some((*start_time, *end_time, *name_id, *end_name_id))
+                } else {
+                    None
+                }
+            })
+        })
+    }
 }
 
 #[derive(Debug, Default, Serialize)]

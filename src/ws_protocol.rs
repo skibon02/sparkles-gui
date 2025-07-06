@@ -20,5 +20,11 @@ pub enum MessageFromServer {
         clients: Vec<Vec<SocketAddr>>,
     },
     ConnectError(String),
-    Stats(StorageStats)
+    Stats(StorageStats),
+    CurrentClientTimestamp(SocketAddr, u64),
+    NewEvents {
+        addr: SocketAddr,
+        thread_ord_id: u64,
+        data: Vec<u8>,
+    },
 }

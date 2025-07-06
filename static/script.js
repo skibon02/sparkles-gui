@@ -4,6 +4,8 @@ let reconnectInterval = 1000; // 1 second
 const el = (cls) => document.querySelector(`.${cls}`);
 const q = (sel) => document.querySelectorAll(sel);
 
+let request_start_tm = 0;
+let request_end_tm = 100000;
 function connect() {
     socket = new WebSocket(`ws://${window.location.host}/ws`);
 
@@ -36,6 +38,11 @@ function connect() {
             el("total-instant-events").innerHTML = msg["Stats"].instant_events;
             el("total-range-events").innerHTML = msg["Stats"].range_events;
         }
+        if (msg["CurrentClientTimestamp"] !== undefined) {
+            let tm = msg["CurrentClientTimestamp"][1];
+            request_start_tm = tm - 10000000000; // last 10 seconds
+            request_end_tm = tm;
+        }
         console.log("Received:", event.data);
     };
 
@@ -63,8 +70,8 @@ const ws_send = (message) => {
 
 el("request-samples").addEventListener("click", function() {
     ws_send(JSON.stringify({ "RequestNewRange": {
-            "start": 0,
-            "end": 99999999
+            "start": request_start_tm,
+            "end": request_end_tm
         }
     }));
 });
