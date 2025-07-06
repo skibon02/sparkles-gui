@@ -1,10 +1,9 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::iter::Sum;
-use std::ops::{Add, AddAssign};
+use std::ops::Add;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use axum::response::sse::Event;
 use log::{error, info};
 use serde::Serialize;
 use slab::Slab;
@@ -211,13 +210,18 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
                 // Iterate over threads
                 for (thread_ord_id, thread_storage) in storage.thread_events.iter() {
                     // Encode data
-                    let mut buf = Vec::new();
+                    let mut res_buf = Vec::new();
 
+                    let mut buf = Vec::new();
                     for (tm, id) in thread_storage.request_instant_events(*start, *end) {
                         buf.extend_from_slice(&tm.to_le_bytes());
                         buf.push(id);
                     }
+                    let len = buf.len() as u32;
+                    res_buf.extend_from_slice(&len.to_le_bytes());
+                    res_buf.extend_from_slice(&buf);
 
+                    let mut buf = Vec::new();
                     for (start, end, start_id, end_id) in thread_storage.request_range_events(*start, *end) {
                         buf.extend_from_slice(&start.to_le_bytes());
                         buf.extend_from_slice(&end.to_le_bytes());
@@ -228,10 +232,11 @@ pub async fn run(shared_data: SharedDataWrapper, mut client_msg_rx: Receiver<Mes
                             buf.push(255); // Use 255 to indicate no end event
                         }
                     }
+                    res_buf.extend_from_slice(&buf);
 
                     info!("Connection manager: sending range request response to {} for thread {}: start={}, end={}, data size={}",
                         client_addr, thread_ord_id, start, end, buf.len());
-                    resp.send((*client_addr, *thread_ord_id, buf)).await?;
+                    resp.send((*client_addr, *thread_ord_id, res_buf)).await?;
                 }
             }
             closed_ranges.push(idx);
