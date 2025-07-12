@@ -6,7 +6,6 @@ use std::time::Instant;
 use parking_lot::Mutex;
 use sparkles_parser::TracingEventId;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot::Sender;
 use crate::tasks::sparkles_connection::storage::StorageStats;
 
 #[derive(Clone)]

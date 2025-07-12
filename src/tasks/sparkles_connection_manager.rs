@@ -25,7 +25,7 @@ pub async fn run(discovery_shared: DiscoveryShared, ws_shared: SparklesWebsocket
                 addr,
                 resp
             } => {
-                info!("Got connection request for {}", addr);
+                info!("Got connection request for {addr}");
                 let mut guard = discovery_shared.0.lock();
                 if guard.active_connections.contains(&addr) {
                     let _ = resp.send(Err("Already connected".into()));

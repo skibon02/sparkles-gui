@@ -22,10 +22,10 @@ pub fn spawn_conn_handler(addr: SocketAddr, conn: SparklesConnection) {
 
     let _ = tokio::spawn(async move {
         if let Err(e) = run(addr, conn, client_storage).await {;
-            error!("Error running Sparkles connection: {}", e);
+            error!("Error running Sparkles connection: {e}");
         }
         else {
-            info!("Sparkles connection handler for {} finished successfully", addr);
+            info!("Sparkles connection handler for {addr} finished successfully");
         }
     });
 }
@@ -54,7 +54,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                             start,
                             end,
                         });
-                        info!("Connection manager: added new range request for start: {}, end: {}", start, end);
+                        info!("Connection manager: added new range request for start: {start}, end: {end}");
                     }
                     WsToSparklesMessage::GetEventNames {
                         thread,
@@ -203,7 +203,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
 fn spawn_connection(addr: SocketAddr, events_tx: tokio::sync::mpsc::Sender<SparklesConnectionMessage>) {
     thread::spawn(move || {
         let decoder = PacketDecoder::from_socket(addr);
-        info!("Connected to Sparkles at {}", addr);
+        info!("Connected to Sparkles at {addr}");
 
         let events_tx2 = events_tx.clone();
         let mut thread_infos = HashMap::new();

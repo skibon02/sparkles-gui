@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::iter::Sum;
 use std::ops::Add;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 use std::time::Instant;
 use serde::Serialize;
 use slab::Slab;

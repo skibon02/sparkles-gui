@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::time::{Duration};
+use std::time::{Duration, Instant};
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use log::{error, info, warn};
 use tokio::time::interval;
@@ -11,7 +11,10 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
     info!("New WebSocket connection: {}", conn.id());
     let mut send_ticker = interval(Duration::from_secs(2));
     let mut active_connections_ticker = interval(Duration::from_millis(100));
-    let mut sync_ticker = interval(Duration::from_secs(1));
+    let sync_ticker = interval(Duration::from_secs(1));
+
+    let start_time = Instant::now();
+
 
     let mut is_channel_registered = false;
     let (mut dummy_tx, dummy_rx) = tokio::sync::mpsc::channel(1);
@@ -60,16 +63,16 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to deserialize message from client: {}. Message: {}", e, text);
+                                    error!("Failed to deserialize message from client: {e}. Message: {text}");
                                 }
                             }
                         }
                         Message::Binary(data) => {
-                            info!("Received binary message: {:?}", data);
+                            info!("Received binary message: {data:?}");
                         }
                         Message::Ping(ping) => {
                             socket.send(Message::Pong(ping)).await.unwrap_or_else(|e| {
-                                error!("Failed to send Pong response: {}", e);
+                                error!("Failed to send Pong response: {e}");
                             })
                         }
                         Message::Pong(_) => {
@@ -90,7 +93,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                 let json = match serde_json::to_string(&msg) {
                     Ok(json) => json,
                     Err(e) => {
-                        error!("Failed to serialize discovered clients: {}", e);
+                        error!("Failed to serialize discovered clients: {e}");
                         continue;
                     }
                 };
