@@ -1,25 +1,23 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use log::{error, info, warn};
-use sparkles_parser::TracingEventId;
-use tokio::sync::mpsc::Sender;
 use tokio::time::interval;
-use crate::tasks::connection_manager::StorageStats;
-use crate::tasks::server::SharedDataWrapper;
-use crate::ws_protocol::{MessageFromServer, MessageToServer};
+use crate::shared::WsConnection;
+use crate::tasks::sparkles_connection::storage::StorageStats;
+use crate::tasks::web_server::DiscoveryShared;
 
-pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper, client_msg_tx: Sender<MessageFromClient>, client_id: u32) -> anyhow::Result<()> {
-    info!("New WebSocket connection: {client_id}");
+pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, mut conn: WsConnection) -> anyhow::Result<()> {
+    info!("New WebSocket connection: {}", conn.id());
     let mut send_ticker = interval(Duration::from_secs(2));
-    let mut stats_ticker = interval(Duration::from_millis(500));
+    let mut active_connections_ticker = interval(Duration::from_millis(100));
     let mut sync_ticker = interval(Duration::from_secs(1));
 
     let mut is_channel_registered = false;
     let (mut dummy_tx, dummy_rx) = tokio::sync::mpsc::channel(1);
+
     let mut event_data_rx_channel = dummy_rx;
+    let mut current_sparkles_id = 0;
     loop {
         tokio::select! {
             msg = socket.recv() => {
@@ -36,33 +34,26 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
                                 Ok(msg_to_server) => {
                                     match msg_to_server {
                                         MessageToServer::Connect { addr } => {
-                                            let (resp, resp_rx) = tokio::sync::oneshot::channel();
-                                            let msg = MessageFromClient::Connect {
-                                                addr,
-                                                resp,
-                                            };
-                                            let _ = client_msg_tx.send(msg).await;
-
-                                            if let Ok(Err(msg)) = resp_rx.await {
-                                                let _ = send_websocket(&mut socket, MessageFromServer::ConnectError(msg)).await;
+                                            match conn.connect(addr).await? {
+                                                Ok(id) => {
+                                                    send_websocket(&mut socket, MessageFromServer::Connected { id, addr }).await?;
+                                                }
+                                                Err(msg) => {
+                                                    let _ = send_websocket(&mut socket, MessageFromServer::ConnectError(msg.to_string())).await;
+                                                }
                                             }
                                         }
-                                        MessageToServer::RequestNewRange { start, end } => {
+                                        MessageToServer::RequestNewRange { id, start, end } => {
                                             if is_channel_registered {
                                                 send_websocket(&mut socket, MessageFromServer::ConnectError("Already waiting for a range".into())).await?;
                                             }
                                             else {
-                                                let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(5);
-                                                let msg = MessageFromClient::RequestNewEvents {
-                                                    start,
-                                                    end,
-                                                    resp: resp_tx,
-                                                };
-                                                client_msg_tx.send(msg).await?;
+                                                let resp_rx = conn.request_new_events(id, start, end).await?;
 
                                                 // Register the response channel
                                                 info!("Channel registered!");
                                                 event_data_rx_channel = resp_rx;
+                                                current_sparkles_id = id;
                                                 is_channel_registered = true;
                                             }
                                         }
@@ -106,36 +97,40 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: SharedDataWrapper
 
                 let _ = send_websocket(&mut socket, msg).await;
             }
-            _ = stats_ticker.tick() => {
-                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                let msg = MessageFromClient::GetStorageStats {
-                    resp: resp_tx
-                };
-                client_msg_tx.send(msg).await?;
-                let res = resp_rx.await?;
-                let msg = MessageFromServer::Stats(res);
-                let _ = send_websocket(&mut socket, msg).await;
-            }
-            _ = sync_ticker.tick() => {
-                let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel(5);
-                let msg = MessageFromClient::GetCurrentClientTimestamps {
-                    resp: resp_tx
-                };
-                client_msg_tx.send(msg).await?;
-                while let Some((addr, local_tm, timestamp)) = resp_rx.recv().await {
-                    let elapsed_ns = local_tm.elapsed().as_nanos() as u64;
-                    let msg = MessageFromServer::CurrentClientTimestamp(addr, timestamp + elapsed_ns);
-                    let _ = send_websocket(&mut socket, msg).await;
+            _ = active_connections_ticker.tick() => {
+                // Periodically send active connections
+                let clients = conn.active_sparkles_connections();
+                let mut conns = Vec::new();
+
+                for (id, addr) in clients {
+                    let stats = conn.get_storage_stats(id).await?;
+                    conns.push(ActiveConnectionInfo {
+                        id,
+                        addr,
+                        stats
+                    })
                 }
+                let _ = send_websocket(&mut socket, MessageFromServer::ActiveConnections(conns)).await;
             }
+            // _ = sync_ticker.tick() => {
+            //     // Periodically request current client timestamps
+            //     let msg = MessageFromClient::GetCurrentClientTimestamps {
+            //         resp: resp_tx
+            //     };
+            //     conn.send(msg).await?;
+            //     while let Some((addr, local_tm, timestamp)) = resp_rx.recv().await {
+            //         let elapsed_ns = local_tm.elapsed().as_nanos() as u64;
+            //         let msg = MessageFromServer::CurrentClientTimestamp(addr, timestamp + elapsed_ns);
+            //         let _ = send_websocket(&mut socket, msg).await;
+            //     }
+            // }
             res = event_data_rx_channel.recv() => {
                 match res {
-                    Some((addr, thread_ord_id, data)) => {
-                        let msg = MessageFromServer::NewEvents {
-                            addr,
+                    Some((thread_ord_id, data)) => {
+                        let msg = MessageFromServer::addressed(current_sparkles_id, AddressedMessageFromServer::NewEvents {
                             thread_ord_id,
-                            data,
-                        };
+                            data
+                        });
                         let _ = send_websocket(&mut socket, msg).await;
                     }
                     None => {
@@ -158,30 +153,53 @@ async fn send_websocket(socket: &mut WebSocket, msg: MessageFromServer) -> anyho
     Ok(())
 }
 
-#[derive(Debug)]
-pub enum MessageFromClient {
+#[derive(Debug, Clone, serde::Deserialize)]
+pub enum MessageToServer {
     Connect {
         addr: SocketAddr,
-        resp: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
-    RequestNewEvents {
+    RequestNewRange {
+        id: u32,
         start: u64,
         end: u64,
-        resp: tokio::sync::mpsc::Sender<(SocketAddr, u64, Vec<u8>)>,
     },
-    GetThreadNames {
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActiveConnectionInfo {
+    id: u32,
+    addr: SocketAddr,
+    stats: StorageStats,
+}
+#[derive(Debug, Clone, serde::Serialize)]
+pub enum MessageFromServer {
+    DiscoveredClients {
+        clients: Vec<Vec<SocketAddr>>,
+    },
+    ActiveConnections(Vec<ActiveConnectionInfo>),
+    ConnectError(String),
+    Connected {
+        id: u32,
         addr: SocketAddr,
-        resp: tokio::sync::oneshot::Sender<HashMap<u64, String>>,
     },
-    GetEventNames {
-        addr: SocketAddr,
-        thread: u64,
-        resp: tokio::sync::oneshot::Sender<HashMap<TracingEventId, Arc<str>>>,
-    },
-    GetStorageStats {
-        resp: tokio::sync::oneshot::Sender<StorageStats>,
-    },
-    GetCurrentClientTimestamps {
-        resp: tokio::sync::mpsc::Sender<(SocketAddr, Instant, u64)>,
+
+    Addressed {
+        id: u32,
+        message: AddressedMessageFromServer,
     }
+}
+
+impl MessageFromServer {
+    pub fn addressed(id: u32, message: AddressedMessageFromServer) -> Self {
+        Self::Addressed { id, message }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub enum AddressedMessageFromServer {
+    NewEvents {
+        thread_ord_id: u64,
+        data: Vec<u8>,
+    },
+    CurrentClientTimestamp(u64),
 }

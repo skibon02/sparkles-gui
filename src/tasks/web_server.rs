@@ -1,16 +1,15 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::WebSocket;
 use axum::Router;
 use axum::routing::any;
 use log::{error, info};
 use parking_lot::Mutex;
-use tokio::sync::mpsc::Sender;
 use tower_http::services::{ServeDir, ServeFile};
-use crate::tasks::ws_connection::{handle_socket, MessageFromClient};
+use crate::shared::SparklesWebsocketShared;
+use crate::tasks::ws_connection::{handle_socket};
 use crate::util::ShutdownSignal;
 
 #[derive(Debug, Default)]
@@ -20,26 +19,42 @@ pub(crate) struct SharedData {
 }
 
 #[derive(Clone)]
-pub(crate) struct SharedDataWrapper(pub Arc<Mutex<SharedData>>);
-impl SharedDataWrapper {
+pub(crate) struct DiscoveryShared(pub Arc<Mutex<SharedData>>);
+impl DiscoveryShared {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(SharedData::default())))
     }
 }
 
-static LAST_CLIENT_ID: AtomicU32 = AtomicU32::new(0);
-pub async fn run_server(shutdown: ShutdownSignal, shared_data: SharedDataWrapper, client_msg_tx: Sender<MessageFromClient>) {
+pub async fn spawn_server(
+    shutdown: ShutdownSignal,
+    discovery_shared: DiscoveryShared,
+    sparkles_shared: SparklesWebsocketShared,
+) {
+    let server_task = tokio::spawn(async move {
+        run_server(shutdown, discovery_shared, sparkles_shared).await;
+    });
+
+    if let Err(e) = server_task.await {
+        error!("Web server task failed: {e:?}");
+    }
+    else {
+        info!("Web server task exited");
+    }
+}
+async fn run_server(shutdown: ShutdownSignal, shared_data: DiscoveryShared, sparkles_shared: SparklesWebsocketShared) {
     let static_files = ServeDir::new("static").not_found_service(ServeFile::new("static/404.html"));
     let shared_data_clone = shared_data.clone();
     let app = Router::new()
         .route_service("/", ServeFile::new("static/index.html"))
         .route("/ws", any(async |ws: WebSocketUpgrade| {
             ws.on_upgrade(|socket: WebSocket| async move {
-                let new_client_id = LAST_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
-                if let Err(e) = handle_socket(socket, shared_data_clone, client_msg_tx, new_client_id).await {
+                let conn = sparkles_shared.new_ws_connection();
+                let conn_id = conn.id();
+                if let Err(e) = handle_socket(socket, shared_data_clone, conn).await {
                     error!("Error handling WebSocket connection: {e:?}");
                 } else {
-                    info!("WebSocket connection closed for client ID: {new_client_id}");
+                    info!("WebSocket connection closed for client ID: {conn_id}");
                 }
             })
         }))

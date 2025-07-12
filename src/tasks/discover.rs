@@ -3,16 +3,16 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use log::{error, info};
 use sparkles_parser::DiscoveryWrapper;
-use crate::tasks::server::{SharedDataWrapper};
+use crate::tasks::web_server::{DiscoveryShared};
 use crate::util::ShutdownSignal;
 
 pub struct DiscoverTask {
     shutdown: ShutdownSignal,
-    shared_data: SharedDataWrapper
+    shared_data: DiscoveryShared
 }
 
 impl DiscoverTask {
-    pub fn new(shutdown: ShutdownSignal, shared_data: SharedDataWrapper) -> Self {
+    pub fn new(shutdown: ShutdownSignal, shared_data: DiscoveryShared) -> Self {
         Self {
             shutdown,
             shared_data

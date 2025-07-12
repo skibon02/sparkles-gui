@@ -6,6 +6,7 @@ const q = (sel) => document.querySelectorAll(sel);
 
 let request_start_tm = 0;
 let request_end_tm = 100000;
+let activeConnections = []; // Array of {id, addr, stats}
 function connect() {
     socket = new WebSocket(`ws://${window.location.host}/ws`);
 
@@ -15,13 +16,14 @@ function connect() {
 
     socket.onmessage = async function(event) {
         let msg = JSON.parse(event.data);
+        
         if (msg["DiscoveredClients"] !== undefined) {
             let text = "";
             for (let addrs of msg["DiscoveredClients"].clients) {
                 text += `<p class="client-cont">`;
                 for (let addr of addrs) {
                     text += `<span class="addr">${addr}</span>`;
-                    text += `<button class="btn connect-btn" data-addr=${addr}>Connect</button>`;
+                    text += `<button class="btn connect-btn" data-addr='${addr}'>Connect</button>`;
                     text += `<br/>`;
                 }
                 text += `</p>`;
@@ -30,68 +32,85 @@ function connect() {
             for (let el of q(".discovered-clients .connect-btn")) {
                 el.addEventListener("click", function() {
                     let addr = el.dataset.addr;
-                    ws_send(JSON.stringify({ "Connect": {addr} }));
+                    ws_send(JSON.stringify({ "Connect": { "addr": addr } }));
                 });
             }
         }
-        if (msg["Stats"] !== undefined) {
-            el("total-instant-events").innerHTML = msg["Stats"].instant_events;
-            el("total-range-events").innerHTML = msg["Stats"].range_events;
+        
+        if (msg["Connected"] !== undefined) {
+            const { id, addr } = msg["Connected"];
+            console.log("Connected to client:", id, addr);
         }
-        if (msg["CurrentClientTimestamp"] !== undefined) {
-            let tm = msg["CurrentClientTimestamp"][1];
-            request_start_tm = tm - 10000000000; // last 10 seconds
-            request_end_tm = tm;
+        
+        if (msg["ConnectError"] !== undefined) {
+            console.error("Connection error:", msg["ConnectError"]);
+            alert("Connection error: " + msg["ConnectError"]);
         }
-        if (msg["NewEvents"] !== undefined) {
-            let data = msg["NewEvents"].data;
-            let addr = msg["NewEvents"].addr;
-            let thread_ord_id = msg["NewEvents"].thread_ord_id;
+        
+        if (msg["ActiveConnections"] !== undefined) {
+            activeConnections = msg["ActiveConnections"];
+            updateActiveConnectionsDisplay();
+        }
+        
+        if (msg["Addressed"] !== undefined) {
+            const { id, message } = msg["Addressed"];
+            
+            if (message["NewEvents"] !== undefined) {
+                let data = message["NewEvents"].data;
+                let thread_ord_id = message["NewEvents"].thread_ord_id;
+                let addr = `client-${id}`;  // Will be replaced with actual addr from activeConnections
 
-            const uint8Array = new Uint8Array(data);
-            const view = new DataView(uint8Array.buffer);
+                const uint8Array = new Uint8Array(data);
+                const view = new DataView(uint8Array.buffer);
 
+                let offset = 0;
 
-            let offset = 0;
+                // 1. Parse Instant Events
+                const instantEventsLen = view.getUint32(offset, true);
+                offset += 4;
+                const instantEventsEnd = offset + instantEventsLen;
 
-            // 1. Parse Instant Events
-            const instantEventsLen = view.getUint32(offset, true);
-            offset += 4;
-            const instantEventsEnd = offset + instantEventsLen;
+                let html = "";
+                while (offset < instantEventsEnd) {
+                    const tm = Number(view.getBigUint64(offset, true));
+                    offset += 8;
+                    const eventId = view.getUint8(offset);
+                    offset += 1;
 
-            let html = "";
-            while (offset < instantEventsEnd) {
-                const tm = Number(view.getBigUint64(offset, true)); // Convert to Number if timestamp fits
-                offset += 8;
-                const id = view.getUint8(offset);
-                offset += 1;
+                    const str = `${addr}-${thread_ord_id}-${eventId}`;
+                    const color = await generateColorForThread(str);
+                    const pos = `${(tm - request_start_tm) / 1000000000 * 10}vw`;
+                    const vert_pos = `${thread_ord_id * 40}px`
+                    html += `<div class="event instant-event" style="background-color: ${color.hex}; left: ${pos}; top: ${vert_pos}"></div>`;
+                }
 
-                const str = `${addr}-${thread_ord_id}-${id}`;
-                const color = await generateColorForThread(str);
-                const pos = `${(tm - request_start_tm) / 1000000000 * 10}vw`;
-                const vert_pos = `${thread_ord_id * 40}px`
-                html += `<div class="event instant-event" style="background-color: ${color.hex}; left: ${pos}; top: ${vert_pos}"></div>`;
+                while (offset < data.length) {
+                    const start = Number(view.getBigUint64(offset, true));
+                    offset += 8;
+                    const end = Number(view.getBigUint64(offset, true));
+                    offset += 8;
+                    const start_id = view.getUint8(offset);
+                    offset += 1;
+                    const end_id = view.getUint8(offset);
+                    offset += 1;
+
+                    const str = `${addr}-${thread_ord_id}-${start_id}`;
+                    const color = await generateColorForThread(str);
+                    const pos = `${(start - request_start_tm) / 1000000000 * 10}vw`;
+                    const vert_pos = `${thread_ord_id * 40}px`
+                    html += `<div class="event range-event" style="background-color: ${color.hex}; left: ${pos}; top: ${vert_pos}"></div>`;
+                }
+
+                el("events").innerHTML = html;
             }
-
-            while (offset < data.byteLength) {
-                const start = Number(view.getBigUint64(offset, true));
-                offset += 8;
-                const end = Number(view.getBigUint64(offset, true));
-                offset += 8;
-                const start_id = view.getUint8(offset);
-                offset += 1;
-                const end_id = view.getUint8(offset);
-                offset += 1;
-
-                const str = `${addr}-${thread_ord_id}-${start_id}`;
-                const color = await generateColorForThread(str);
-                const pos = `${(start - request_start_tm) / 1000000000 * 10}vw`;
-                const vert_pos = `${thread_ord_id * 40}px`
-                html += `<div class="event range-event" style="background-color: ${color.hex}; left: ${pos}; top: ${vert_pos}"></div>`;
+            
+            if (message["CurrentClientTimestamp"] !== undefined) {
+                let tm = message["CurrentClientTimestamp"];
+                request_start_tm = tm - 10000000000; // last 10 seconds
+                request_end_tm = tm;
             }
-
-            el("events").innerHTML = html;
         }
+        
         console.log("Received:", event.data);
     };
 
@@ -117,13 +136,41 @@ const ws_send = (message) => {
     }
 }
 
-el("request-samples").addEventListener("click", function() {
-    ws_send(JSON.stringify({ "RequestNewRange": {
-            "start": request_start_tm,
-            "end": request_end_tm
+function updateActiveConnectionsDisplay() {
+    let text = "";
+    for (let connection of activeConnections) {
+        text += `<div class="client-cont">`;
+        text += `<div class="client-header">`;
+        text += `<span class="addr">ID: ${connection.id} - ${connection.addr}</span>`;
+        text += `<button class="btn request-btn" data-id="${connection.id}">Request Events</button>`;
+        text += `</div>`;
+        
+        if (connection.stats) {
+            text += `<div class="client-stats">`;
+            text += `<span>Instant events: ${connection.stats.instant_events}</span>`;
+            text += `<span>Range events: ${connection.stats.range_events}</span>`;
+            text += `</div>`;
         }
-    }));
-});
+        
+        text += `</div>`;
+    }
+    el("active-clients").innerHTML = text;
+    
+    // Add event listeners to request buttons
+    for (let el of q(".active-clients .request-btn")) {
+        el.addEventListener("click", function() {
+            let id = parseInt(el.dataset.id);
+            ws_send(JSON.stringify({ 
+                "RequestNewRange": {
+                    "id": id,
+                    "start": request_start_tm,
+                    "end": request_end_tm
+                }
+            }));
+        });
+    }
+}
+
 
 // Color generation function (from previous answer)
 async function generateColorForThread(str) {

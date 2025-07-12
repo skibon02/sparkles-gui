@@ -45,3 +45,30 @@ body {
 .events .event:hover {
     filter: brightness(1.2);
 }
+
+.client-cont {
+    border: 1px solid #1e5c58;
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.client-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.client-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 0.9em;
+    color: #a0d0e0;
+}
+
+.client-stats span {
+    padding: 2px 8px;
+    background-color: #1a4b4c;
+    border-radius: 3px;
+}
