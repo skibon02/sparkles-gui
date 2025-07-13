@@ -161,11 +161,11 @@ impl WsConnection {
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn get_current_client_timestamps(&mut self, id: u32) -> anyhow::Result<tokio::sync::mpsc::Receiver<(Instant, u64)>> {
-        let (sender, receiver) = tokio::sync::mpsc::channel(5);
-        let msg = WsToSparklesMessage::GetCurrentClientTimestamps { resp: sender };
+    pub async fn get_connection_timestamps(&mut self, id: u32) -> anyhow::Result<Option<(u64, u64, u64)>> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let msg = WsToSparklesMessage::GetConnectionTimestamps { resp: sender };
         self.send_message(id, msg)?;
-        Ok(receiver)
+        receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
     pub async fn request_new_events(&mut self, id: u32, start: u64, end: u64) -> anyhow::Result<tokio::sync::mpsc::Receiver<(u64, Vec<u8>)>> {
@@ -262,8 +262,8 @@ pub enum WsToSparklesMessage {
         end: u64,
         events_channel: tokio::sync::mpsc::Sender<(u64, Vec<u8>)>,
     },
-    GetCurrentClientTimestamps {
-        resp: tokio::sync::mpsc::Sender<(Instant, u64)>,
+    GetConnectionTimestamps {
+        resp: tokio::sync::oneshot::Sender<Option<(u64, u64, u64)>>,
     },
     GetStorageStats {
         resp: tokio::sync::oneshot::Sender<StorageStats>,

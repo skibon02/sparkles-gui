@@ -1,0 +1,121 @@
+/* Import Inter font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+:root {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: #222132;
+  color: #86cfea;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+h1 {
+  font-size: 2.5em;
+  margin-bottom: 20px;
+  color: #86cfea;
+}
+
+.btn {
+  background-color: #1e5c58;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-block;
+  text-decoration: none;
+  user-select: none;
+  transition: background-color 0.3s ease;
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.btn:hover {
+  background-color: #1a4b4c;
+}
+
+.container {
+  margin: 10px 0;
+}
+
+.events {
+  position: relative;
+  width: 100%;
+  height: 20vh;
+  background-color: #86cfea;
+  margin-top: auto;
+}
+
+.events .event {
+  position: absolute;
+  display: inline-block;
+  will-change: transform;
+  width: 20px;
+  height: 20px;
+  border-radius: 0 50%;
+}
+
+.events .event:hover {
+  filter: brightness(1.2);
+}
+
+.client-cont {
+  border: 1px solid #1e5c58;
+  margin: 10px 0;
+  padding: 10px;
+  border-radius: 5px;
+}
+
+.client-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.client-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  font-size: 0.9em;
+  color: #a0d0e0;
+}
+
+.client-stats span {
+  padding: 2px 8px;
+  background-color: #1a4b4c;
+  border-radius: 3px;
+}
+
+.addr {
+  color: #86cfea;
+  font-weight: 500;
+}

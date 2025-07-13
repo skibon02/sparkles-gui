@@ -60,10 +60,19 @@ async fn run_server(shutdown: ShutdownSignal, shared_data: DiscoveryShared, spar
         }))
         .fallback_service(static_files);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+    // Use fixed port 8080 for development, or environment variable
+    let port = std::env::var("PORT")
+        .unwrap_or_else(|_| "8080".to_string())
+        .parse::<u16>()
+        .unwrap_or(8080);
+    
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
     info!("Server running on http://127.0.0.1:{port}");
-    let _ = open::that(format!("http://127.0.0.1:{port}"));
+    
+    // Only auto-open browser if not in development mode
+    if std::env::var("SPARKLES_DEV").is_err() {
+        let _ = open::that(format!("http://127.0.0.1:{port}"));
+    }
 
 
     if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(shutdown.wait()).await {

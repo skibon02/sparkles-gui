@@ -38,10 +38,10 @@ struct ActiveRangeRequest {
 
 async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: ClientStorage) -> anyhow::Result<()> {
     let mut active_sending_request: Option<ActiveRangeRequest> = None;
+    let (mut dummy_tx, _dummy_rx) = tokio::sync::mpsc::channel(1);
 
     loop {
         select! {
-            // Receive messages from the WebSocket connection
             res = conn.recv_message() => {
                 let (ws_id, msg) = res?;
                 match msg {
@@ -71,16 +71,19 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     } => {
                         let _ = resp.send(storage.thread_names.clone());
                     }
-                    WsToSparklesMessage::GetCurrentClientTimestamps {
+                    WsToSparklesMessage::GetConnectionTimestamps {
                         resp
                     } => {
-                        let now = Instant::now();
-                        if let Some((last_sync_time, last_sync_tm)) = storage.last_sync {
-                            // adjust local time
+                        if let Some(conn_ts) = &storage.conn_timestamps {
+                            let now = Instant::now();
+                            let (last_sync_time, last_sync_tm) = conn_ts.last_sync;
                             let elapsed = now - last_sync_time;
                             let elapsed_ns = elapsed.as_nanos() as u64;
                             let adjusted_tm = last_sync_tm + elapsed_ns;
-                            resp.send((now, adjusted_tm)).await?;
+                            
+                            let _ = resp.send(Some((conn_ts.min_tm, conn_ts.max_tm, adjusted_tm)));
+                        } else {
+                            let _ = resp.send(None);
                         }
                     }
                     WsToSparklesMessage::GetStorageStats {
@@ -92,24 +95,15 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
 
             },
 
-            // Receive new parsed Sparkles events
             res = storage.msg_rx.recv() => {
                 if let Some(msg) = res {
                     match msg {
                         SparklesConnectionMessage::Events { thread_ord_id, events } => {
-                            // Update last sync time
-                            let last_event_tm = events.last();
-                            if let Some(last_event) = last_event_tm {
-                                storage.last_sync = match last_event {
-                                    ParsedEvent::Instant { tm, .. } => Some((Instant::now(), *tm)),
-                                    ParsedEvent::Range { end, .. } => Some((Instant::now(), *end))
-                                };
-                            }
-
-                            // Insert new events
                             let thread_storage = storage.thread_events
                                 .entry(thread_ord_id)
                                 .or_default();
+
+                            let mut event_timestamps = Vec::new();
 
                             for event in events {
                                 match event {
@@ -117,6 +111,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                                         tm,
                                         name_id
                                     } => {
+                                        event_timestamps.push(tm);
                                         thread_storage.instant_events.insert(tm, name_id);
                                     }
                                     ParsedEvent::Range {
@@ -125,6 +120,9 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                                         name_id,
                                         end_name_id,
                                     } => {
+                                        event_timestamps.push(start);
+                                        event_timestamps.push(end);
+                                        
                                         match thread_storage.range_events_starts.entry(start) {
                                             std::collections::btree_map::Entry::Vacant(entry) => {
                                                 let mut vec = SmallVec::new();
@@ -136,6 +134,25 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            if !event_timestamps.is_empty() {
+                                let now = Instant::now();
+                                let last_event_tm = *event_timestamps.iter().max().unwrap();
+                                
+                                if let Some(conn_ts) = &mut storage.conn_timestamps {
+                                    conn_ts.last_sync = (now, last_event_tm);
+                                    conn_ts.min_tm = conn_ts.min_tm.min(*event_timestamps.iter().min().unwrap());
+                                    conn_ts.max_tm = conn_ts.max_tm.max(*event_timestamps.iter().max().unwrap());
+                                } else {
+                                    let min_tm = *event_timestamps.iter().min().unwrap();
+                                    let max_tm = *event_timestamps.iter().max().unwrap();
+                                    storage.conn_timestamps = Some(storage::ConnectionTimestamps {
+                                        last_sync: (now, last_event_tm),
+                                        min_tm,
+                                        max_tm,
+                                    });
                                 }
                             }
                         }
@@ -151,16 +168,21 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     }
 
                 }
+                else {
+                    info!("Sparkles channel closed, preserving events");
+                    let (tx, rx) = tokio::sync::mpsc::channel(1);
+
+                    storage.msg_rx = rx;
+                    dummy_tx = tx;
+                }
             },
         }
 
-        // Send events after RequestNewRange received
         if let Some(ActiveRangeRequest {
                 start, end, resp
             }) = active_sending_request.take() {
 
             for (thread_ord_id, thread_storage) in storage.thread_events.iter() {
-                // Encode data
                 let mut res_buf = Vec::new();
 
                 let mut buf = Vec::new();
@@ -180,7 +202,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     if let Some(end_id) = end_id {
                         buf.push(end_id);
                     } else {
-                        buf.push(255); // Use 255 to indicate no end event
+                        buf.push(255);
                     }
                 }
                 res_buf.extend_from_slice(&buf);

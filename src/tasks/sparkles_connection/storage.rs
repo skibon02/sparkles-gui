@@ -15,7 +15,13 @@ pub struct ClientStorage {
     pub thread_names: HashMap<u64, String>,
     pub msg_rx: Receiver<SparklesConnectionMessage>,
 
-    pub last_sync: Option<(Instant, u64)>,
+    pub conn_timestamps: Option<ConnectionTimestamps>,
+}
+
+pub struct ConnectionTimestamps {
+    pub last_sync: (Instant, u64),
+    pub min_tm: u64,
+    pub max_tm: u64,
 }
 impl ClientStorage {
     pub fn get_storage_stats(&self) -> StorageStats {
@@ -33,7 +39,7 @@ impl ClientStorage {
         Self {
             thread_events: HashMap::new(),
             thread_names: HashMap::new(),
-            last_sync: None,
+            conn_timestamps: None,
             msg_rx,
         }
     }

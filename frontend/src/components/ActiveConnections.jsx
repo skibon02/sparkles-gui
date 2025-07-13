@@ -1,0 +1,106 @@
+import { observer } from 'mobx-react-lite';
+import { useEffect, useRef } from 'react';
+
+const TimestampBadge = ({ label, value }) => {
+  const formatTimestamp = (ts) => (ts / 1000000000).toFixed(3) + 's';
+  
+  return (
+    <span 
+      style={{
+        backgroundColor: '#f8bbd9',
+        color: 'white',
+        padding: '5px 10px',
+        borderRadius: '5px',
+        marginRight: '10px',
+        fontSize: '0.95em',
+        fontWeight: '500'
+      }}
+    >
+      {label}: {formatTimestamp(value)}
+    </span>
+  );
+};
+
+const ConnectionCanvas = observer(({ store, connectionId }) => {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      store.setCanvasRef(connectionId, canvasRef.current);
+    }
+
+    return () => {
+      store.removeCanvasRef(connectionId);
+    };
+  }, [store, connectionId]);
+
+  return (
+    <canvas 
+      ref={canvasRef}
+      width={800}
+      height={200}
+      style={{ 
+        width: '100%', 
+        height: '200px', 
+        border: '1px solid #ccc',
+        display: 'block',
+        marginTop: '10px'
+      }}
+    />
+  );
+});
+
+const ActiveConnections = observer(({ store }) => {
+  return (
+    <div>
+      <p>Connections:</p>
+      <div className="container active-clients">
+        {store.activeConnections.map((connection) => (
+          <div key={connection.id} className="client-cont">
+            <div className="client-header">
+              <span className="addr">ID: {connection.id} - {connection.addr}</span>
+              <button 
+                className="btn request-btn" 
+                onClick={() => store.requestEvents(connection.id)}
+              >
+                Request Events
+              </button>
+            </div>
+            
+            {connection.stats && (
+              <div className="client-stats">
+                <span>Instant events: {connection.stats.instant_events}</span>
+                <span>Range events: {connection.stats.range_events}</span>
+                
+                {/* Add timestamps if available */}
+                {store.connectionTimestamps[connection.id] && (
+                  <div style={{ marginTop: '8px' }}>
+                    <TimestampBadge 
+                      label="Start" 
+                      value={store.connectionTimestamps[connection.id].min} 
+                    />
+                    <TimestampBadge 
+                      label="End" 
+                      value={store.connectionTimestamps[connection.id].max} 
+                    />
+                    <TimestampBadge 
+                      label="Current" 
+                      value={store.connectionTimestamps[connection.id].current} 
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+            
+            <ConnectionCanvas 
+              store={store}
+              connectionId={connection.id}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+export default ActiveConnections;
