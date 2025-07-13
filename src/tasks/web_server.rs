@@ -43,10 +43,10 @@ pub async fn spawn_server(
     }
 }
 async fn run_server(shutdown: ShutdownSignal, shared_data: DiscoveryShared, sparkles_shared: SparklesWebsocketShared) {
-    let static_files = ServeDir::new("static").not_found_service(ServeFile::new("static/404.html"));
+    let static_files = ServeDir::new("frontend/dist").not_found_service(ServeFile::new("frontend/dist/index.html"));
     let shared_data_clone = shared_data.clone();
     let app = Router::new()
-        .route_service("/", ServeFile::new("static/index.html"))
+        .route_service("/", ServeFile::new("frontend/dist/index.html"))
         .route("/ws", any(async |ws: WebSocketUpgrade| {
             ws.on_upgrade(|socket: WebSocket| async move {
                 let conn = sparkles_shared.new_ws_connection();

@@ -37,8 +37,9 @@ struct ActiveRangeRequest {
 }
 
 async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: ClientStorage) -> anyhow::Result<()> {
-    let mut active_sending_request: Option<ActiveRangeRequest> = None;
+    let mut active_sending_requests: HashMap<u32, ActiveRangeRequest> = HashMap::new();
     let (mut dummy_tx, _dummy_rx) = tokio::sync::mpsc::channel(1);
+    let mut is_disconnected = false;
 
     loop {
         select! {
@@ -50,7 +51,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                         end,
                         events_channel
                     } => {
-                        active_sending_request = Some(ActiveRangeRequest {
+                        active_sending_requests.insert(ws_id, ActiveRangeRequest {
                             resp: events_channel,
                             start,
                             end,
@@ -172,16 +173,19 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     info!("Sparkles channel closed, preserving events");
                     let (tx, rx) = tokio::sync::mpsc::channel(1);
 
+                    is_disconnected = true;
                     storage.msg_rx = rx;
                     dummy_tx = tx;
                 }
             },
         }
 
-        if let Some(ActiveRangeRequest {
-                start, end, resp
-            }) = active_sending_request.take() {
-
+        if let Some(k) = active_sending_requests.keys().next().cloned() {
+            let ActiveRangeRequest {
+                resp,
+                start,
+                end,
+            } = active_sending_requests.remove(&k).unwrap();
             for (thread_ord_id, thread_storage) in storage.thread_events.iter() {
                 let mut res_buf = Vec::new();
 

@@ -135,6 +135,9 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                         let _ = send_websocket(&mut socket, msg).await;
                     }
                     None => {
+                        let msg = MessageFromServer::addressed(current_sparkles_id, AddressedMessageFromServer::EventsFinished);
+                        let _ = send_websocket(&mut socket, msg).await;
+
                         is_channel_registered = false;
                         let (new_dummy_tx, new_dummy_rx) = tokio::sync::mpsc::channel(1);
                         dummy_tx = new_dummy_tx;
@@ -201,6 +204,7 @@ pub enum AddressedMessageFromServer {
         thread_ord_id: u64,
         data: Vec<u8>,
     },
+    EventsFinished,
     ConnectionTimestamps {
         min: u64,
         max: u64,

@@ -59,12 +59,21 @@ const ActiveConnections = observer(({ store }) => {
           <div key={connection.id} className="client-cont">
             <div className="client-header">
               <span className="addr">ID: {connection.id} - {connection.addr}</span>
-              <button 
-                className="btn request-btn" 
-                onClick={() => store.requestEvents(connection.id)}
-              >
-                Request Events
-              </button>
+              <div>
+                <button 
+                  className="btn request-btn" 
+                  onClick={() => store.requestEvents(connection.id)}
+                >
+                  Request Events
+                </button>
+                <button 
+                  className="btn reset-btn" 
+                  onClick={() => store.resetConnectionView(connection.id)}
+                  style={{ marginLeft: '8px' }}
+                >
+                  Reset View
+                </button>
+              </div>
             </div>
             
             {connection.stats && (
@@ -73,19 +82,19 @@ const ActiveConnections = observer(({ store }) => {
                 <span>Range events: {connection.stats.range_events}</span>
                 
                 {/* Add timestamps if available */}
-                {store.connectionTimestamps[connection.id] && (
+                {store.getConnection(connection.id)?.timestamps && (
                   <div style={{ marginTop: '8px' }}>
                     <TimestampBadge 
                       label="Start" 
-                      value={store.connectionTimestamps[connection.id].min} 
+                      value={store.getConnection(connection.id).timestamps.min} 
                     />
                     <TimestampBadge 
                       label="End" 
-                      value={store.connectionTimestamps[connection.id].max} 
+                      value={store.getConnection(connection.id).timestamps.max} 
                     />
                     <TimestampBadge 
                       label="Current" 
-                      value={store.connectionTimestamps[connection.id].current} 
+                      value={store.getConnection(connection.id).timestamps.current} 
                     />
                   </div>
                 )}
