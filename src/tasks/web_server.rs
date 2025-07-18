@@ -61,10 +61,7 @@ async fn run_server(shutdown: ShutdownSignal, shared_data: DiscoveryShared, spar
         .fallback_service(static_files);
 
     // Use fixed port 8080 for development, or environment variable
-    let port = std::env::var("PORT")
-        .unwrap_or_else(|_| "8080".to_string())
-        .parse::<u16>()
-        .unwrap_or(8080);
+    let port = 8080;
     
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
     info!("Server running on http://127.0.0.1:{port}");

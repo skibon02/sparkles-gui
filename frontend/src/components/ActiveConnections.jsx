@@ -5,19 +5,9 @@ const TimestampBadge = ({ label, value }) => {
   const formatTimestamp = (ts) => (ts / 1000000000).toFixed(3) + 's';
   
   return (
-    <span 
-      style={{
-        backgroundColor: '#f8bbd9',
-        color: 'white',
-        padding: '5px 10px',
-        borderRadius: '5px',
-        marginRight: '10px',
-        fontSize: '0.95em',
-        fontWeight: '500'
-      }}
-    >
+    <div className="badge badge-timestamp">
       {label}: {formatTimestamp(value)}
-    </span>
+    </div>
   );
 };
 
@@ -53,7 +43,7 @@ const ConnectionCanvas = observer(({ store, connectionId }) => {
 const ActiveConnections = observer(({ store }) => {
   return (
     <div>
-      <p>Connections:</p>
+      <p>Connections</p>
       <div className="container active-clients">
         {store.activeConnections.map((connection) => (
           <div key={connection.id} className="client-cont">
@@ -78,12 +68,12 @@ const ActiveConnections = observer(({ store }) => {
             
             {connection.stats && (
               <div className="client-stats">
-                <span>Instant events: {connection.stats.instant_events}</span>
-                <span>Range events: {connection.stats.range_events}</span>
+                <div className="badge badge-primary">Instant events: {connection.stats.instant_events}</div>
+                <div className="badge badge-primary">Range events: {connection.stats.range_events}</div>
                 
                 {/* Add timestamps if available */}
                 {store.getConnection(connection.id)?.timestamps && (
-                  <div style={{ marginTop: '8px' }}>
+                  <div className="timestamp-row">
                     <TimestampBadge 
                       label="Start" 
                       value={store.getConnection(connection.id).timestamps.min} 

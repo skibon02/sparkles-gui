@@ -21,9 +21,9 @@ const App = observer(() => {
   return (
     <div className="app">
       <ConnectionStatus store={store} />
-      
-      <h1>Sparkles!</h1>
-      
+
+      <h1>SPARKLES</h1>
+
       <div>
         <DiscoveredClients store={store} />
         <ActiveConnections store={store} />

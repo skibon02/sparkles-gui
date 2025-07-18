@@ -17,7 +17,7 @@ const ConnectionStatus = observer(({ store }) => {
         zIndex: 1000
       }}
     >
-      {store.isConnected ? '🟢 Connected' : '🔴 Disconnected'}
+      {store.isConnected ? ':connected' : ':disconnected'}
     </div>
   );
 });
