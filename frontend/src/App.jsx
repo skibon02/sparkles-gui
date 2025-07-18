@@ -24,10 +24,8 @@ const App = observer(() => {
 
       <h1>SPARKLES</h1>
 
-      <div>
-        <DiscoveredClients store={store} />
-        <ActiveConnections store={store} />
-      </div>
+      <DiscoveredClients store={store} />
+      <ActiveConnections store={store} />
 
     </div>
   );

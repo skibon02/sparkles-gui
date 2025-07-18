@@ -3,13 +3,12 @@ import { observer } from 'mobx-react-lite';
 const DiscoveredClients = observer(({ store }) => {
   return (
     <div>
-      <p>Discovered clients</p>
       <div className="container discovered-clients">
         {store.discoveredClients.map((addrs, index) => (
-          <div key={index} className="client-cont">
+          <div key={index} className="discovered-client">
             {addrs.map((addr, addrIndex) => (
               <div key={addrIndex}>
-                <span className="addr">{addr}</span>
+                <div className="addr">{addr}</div>
                 <button 
                   className="btn connect-btn" 
                   onClick={() => store.connectToClient(addr)}
