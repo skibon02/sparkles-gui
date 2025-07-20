@@ -1,6 +1,27 @@
 /* Import Inter font */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
 
+@font-face {
+    font-family: 'Poxast';
+    src: url('./assets/fonts/Poxast-Regular.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Terminal Grotesque';
+    src: url('./assets/fonts/terminal-grotesque.ttf') format('truetype');
+}
+
+#root > h1 {
+    font-family: 'Poxast', sans-serif;
+    font-weight: 400;
+    font-size: 40px;
+}
+
+#root {
+    font-family: 'Terminal Grotesque', monospace;
+    font-size: 33px;
+}
+
 :root {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
@@ -12,6 +33,8 @@
   --text-accent: #ce9cff;
   --btn-primary: #725faf;
   --btn-hover: #8a73c7;
+  --btn-dark: #4a3d6b;
+  --btn-active: #5a4890;
   --border-primary: #4a6b7c;
   --badge-bg: #2c5770;
   --badge-secondary: #4d7071;
@@ -24,30 +47,18 @@
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
   margin: 0;
 }
 
 #root {
-  width: 100%;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.app {
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
   padding: 20px 0;
-
-    margin-left: 1em;
-    border-left: 2px solid var(--text-primary);
+  margin-left: 1em;
+  border-left: 2px solid var(--text-primary);
 }
 
 h1 {
@@ -66,15 +77,21 @@ h1 {
   display: inline-block;
   text-decoration: none;
   user-select: none;
-  transition: background-color 0.3s ease;
   font-family: inherit;
   font-weight: 400;
     font-size: inherit;
     margin-top: 10px;
+    box-shadow: var(--btn-dark) 4px 4px 0 0px;
 }
 
 .btn:hover {
   background-color: var(--btn-hover);
+}
+
+.btn:active {
+  background-color: var(--btn-active);
+  transform: translate(4px, 4px);
+  box-shadow: none;
 }
 
 .container {

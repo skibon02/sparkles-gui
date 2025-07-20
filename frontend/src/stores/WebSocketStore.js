@@ -65,7 +65,7 @@ class WebSocketStore {
     }, this.reconnectInterval);
   };
 
-  handleMessage = async (event) => {
+  handleMessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
       
@@ -95,7 +95,7 @@ class WebSocketStore {
         const { id, message } = msg.Addressed;
         
         if (message.NewEvents !== undefined) {
-          await this.handleNewEvents(id, message.NewEvents);
+          this.handleNewEvents(id, message.NewEvents);
         }
         else if (message.ConnectionTimestamps !== undefined) {
           this.getOrCreateConnection(id).setTimestamps(message.ConnectionTimestamps);
@@ -113,7 +113,7 @@ class WebSocketStore {
     }
   };
 
-  handleNewEvents = async (connectionId, newEvents) => {
+  handleNewEvents = (connectionId, newEvents) => {
     const startTime = performance.now();
     
     const { data, thread_ord_id } = newEvents;
@@ -166,7 +166,7 @@ class WebSocketStore {
 
     // Update OpenGL buffers directly
     const connection = this.getOrCreateConnection(connectionId);
-    await connection.updateCanvasData(thread_ord_id, instantEvents, rangeEvents);
+    connection.updateCanvasData(thread_ord_id, instantEvents, rangeEvents);
     
     const endTime = performance.now();
     console.log(`Message processing time for connection ${connectionId}, thread ${thread_ord_id}: ${(endTime - startTime).toFixed(2)}ms (${instantEvents.length} instant, ${rangeEvents.length} range events)`);
@@ -205,35 +205,6 @@ class WebSocketStore {
 
   connectToClient = (addr) => {
     this.sendMessage(JSON.stringify({ "Connect": { "addr": addr } }));
-  };
-
-  requestEvents = (connectionId) => {
-    let start = 0;
-    let end = 100000;
-    
-    const connection = this.getConnection(connectionId);
-    if (connection && connection.currentView) {
-      // Always use current scroll/zoom position
-      start = connection.currentView.start;
-      end = connection.currentView.end;
-      console.log(`Connection ${connectionId} current view: ${start.toFixed(0)} - ${end.toFixed(0)}`);
-    } else {
-      console.log(`Connection ${connectionId} has no currentView, using defaults`);
-    }
-    
-    // Convert to integers for backend
-    const startInt = Math.floor(start);
-    const endInt = Math.floor(end);
-    
-    console.log(`Requesting events for connection ${connectionId}: ${startInt} - ${endInt}`);
-    
-    this.sendMessage(JSON.stringify({ 
-      "RequestNewRange": {
-        "conn_id": connectionId,
-        "start": startInt,
-        "end": endInt
-      }
-    }));
   };
 
   // Canvas ref methods - direct delegation to connection

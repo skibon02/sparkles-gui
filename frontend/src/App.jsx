@@ -6,7 +6,6 @@ import {
   ActiveConnections,
   ConnectionStatus
 } from './components';
-import './App.css';
 
 const App = observer(() => {
   const [store] = useState(() => new WebSocketStore());
@@ -19,7 +18,7 @@ const App = observer(() => {
   }, [store]);
 
   return (
-    <div className="app">
+    <>
       <ConnectionStatus store={store} />
 
       <h1>SPARKLES</h1>
@@ -27,7 +26,7 @@ const App = observer(() => {
       <DiscoveredClients store={store} />
       <ActiveConnections store={store} />
 
-    </div>
+    </>
   );
 });
 

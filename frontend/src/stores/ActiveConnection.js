@@ -1,54 +1,23 @@
 import { makeAutoObservable } from 'mobx';
+import trace from "../trace.js";
 
-// Color cache for performance
-const colorCache = new Map();
-
-// Utility functions for color generation
-const generateColorForThread = async (str) => {
-  // Check cache first
-  if (colorCache.has(str)) {
-    return colorCache.get(str);
+function generateColorForThread(seed) {
+  // Simple hash function for string to number
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    const char = seed.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
   }
-
-  const encoder = new TextEncoder();
-  const data = encoder.encode(str);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-  const hue = parseInt(hashHex.substring(0, 4), 16) % 360;
-  const saturation = 80 + (parseInt(hashHex.substring(4, 6), 16) % 20);
-  const value = 30 + parseInt(hashHex.substring(6, 8), 16) % 20;
-
-  const rgb = hsvToRgb(hue, saturation, value);
-  const hex = `#${rgb.map(c => c.toString(16).padStart(2, '0')).join('')}`;
-
-  const result = { hsv: [hue, saturation, value], rgb, hex };
   
-  // Cache the result
-  colorCache.set(str, result);
+  // Use hash to generate RGB values
+  // Ensure we get decent contrast and avoid too dark colors
+  const r = Math.abs(hash) % 156 + 50;
+  const g = Math.abs(hash >> 8) % 156 + 50;
+  const b = Math.abs(hash >> 16) % 156 + 50;
   
-  return result;
-};
-
-const hsvToRgb = (h, s, v) => {
-  h /= 360; s /= 100; v /= 100;
-  let r, g, b;
-  const i = Math.floor(h * 6);
-  const f = h * 6 - i;
-  const p = v * (1 - s);
-  const q = v * (1 - f * s);
-  const t = v * (1 - (1 - f) * s);
-  switch (i % 6) {
-    case 0: r = v; g = t; b = p; break;
-    case 1: r = q; g = v; b = p; break;
-    case 2: r = p; g = v; b = t; break;
-    case 3: r = p; g = q; b = v; break;
-    case 4: r = t; g = p; b = v; break;
-    case 5: r = v; g = p; b = q; break;
-  }
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-};
+  return [r, g, b];
+}
 
 class ActiveConnection {
   id = null;
@@ -125,19 +94,6 @@ class ActiveConnection {
     
     // Force immediate request since this is initial setup
     this.executeEventRequest();
-  }
-
-  resetView() {
-    if (this.timestamps) {
-      this.currentView = {
-        start: this.timestamps.min,
-        end: this.timestamps.max
-      };
-      this.needsRedraw = true;
-      
-      // Auto-request events for reset view
-      this.scheduleEventRequest();
-    }
   }
 
   scheduleEventRequest() {
@@ -240,14 +196,8 @@ class ActiveConnection {
     if (!this.canvasRef) return;
 
     this.canvasRef.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      
-      if (e.shiftKey) {
-        // Horizontal scrolling
-        this.handleHorizontalScroll(e.deltaY);
-      } else if (e.ctrlKey || e.metaKey) {
-        // Zooming with mouse position as anchor
-        // Use actual canvas width, not CSS width
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
         const rect = this.canvasRef.getBoundingClientRect();
         const mouseX = (e.clientX - rect.left) / rect.width;
         this.handleZoom(e.deltaY, mouseX);
@@ -321,7 +271,7 @@ class ActiveConnection {
     }
 
     // Basic WebGL setup (size will be set by updateCanvasSize)
-    this.gl.clearColor(0.1, 0.1, 0.1, 1.0);
+    this.gl.clearColor(0.1333, 0.129, 1.0, 0.0);
     this.gl.enable(this.gl.BLEND);
     this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
 
@@ -452,9 +402,10 @@ class ActiveConnection {
     // Time-based clear color animation
     // const time = performance.now() * 0.001; // Convert to seconds
 
-    const r = 0.45;
-    const g = 0.4;
-    const b = 0.8;
+    const r = 0.13333;
+    const g = 0.129;
+    const b = 0.196;
+    // const b = 1;
 
     this.gl.clearColor(r, g, b, 1.0);
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
@@ -501,7 +452,8 @@ class ActiveConnection {
     this.gl.uniform2f(triangleSizeLocation, 16.0, 20.0); // 16px wide, 20px tall
   }
 
-  async updateCanvasData(thread_ord_id, instantEvents, rangeEvents) {
+  updateCanvasData(thread_ord_id, instantEvents, rangeEvents) {
+    let s = trace.start();
     if (!this.gl || !this.shaderProgram) {
       console.log(`WebGL not ready for connection ${this.id}`);
       return;
@@ -513,17 +465,18 @@ class ActiveConnection {
     });
 
     // Update buffers for this specific thread
-    await this.updateThreadBuffers(thread_ord_id, instantEvents);
+    this.updateThreadBuffers(thread_ord_id, instantEvents);
     
     // Mark that we need to redraw
     this.needsRedraw = true;
+    trace.end(s, "updateCanvasData")
   }
 
-  async updateThreadBuffers(thread_ord_id, instantEvents) {
+  updateThreadBuffers(thread_ord_id, instantEvents) {
     if (!this.gl || !this.timestamps) return;
 
     const eventCount = instantEvents.length;
-    
+
     if (eventCount === 0) {
       // Keep thread but mark as having 0 events (don't delete to avoid race conditions)
       let threadData = this.threadBuffers.get(thread_ord_id);
@@ -551,9 +504,8 @@ class ActiveConnection {
       positions[i] = viewRange > 0 ? (event.timestamp - this.currentView.start) / viewRange : 0.0;
       
       // Generate color using the existing logic
-      const colorResult = await generateColorForThread(event.color_seed);
-      const rgb = colorResult.rgb;
-      
+      const rgb = generateColorForThread(event.color_seed);
+
       // Convert to 0.0-1.0 range for WebGL
       colors[i * 3] = rgb[0] / 255.0;     // R
       colors[i * 3 + 1] = rgb[1] / 255.0; // G  
