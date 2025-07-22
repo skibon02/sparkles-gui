@@ -1,11 +1,14 @@
 import { makeAutoObservable } from 'mobx';
 import ActiveConnection from './ActiveConnection.js';
+import trace from "../trace.js";
 
 class WebSocketStore {
   socket = null;
   isConnected = false;
   reconnectInterval = 1000; // 1 second
   reconnectTimeout = null;
+
+  newEventsHeader = null;
   
   // Data state
   discoveredClients = [];
@@ -67,60 +70,75 @@ class WebSocketStore {
 
   handleMessage = (event) => {
     try {
-      const msg = JSON.parse(event.data);
-      
-      if (msg.DiscoveredClients !== undefined) {
-        this.discoveredClients = msg.DiscoveredClients.clients;
-      }
-      else if (msg.Connected !== undefined) {
-        const { id, addr } = msg.Connected;
-        console.log('Connected to client:', id, addr);
-      }
-      else if (msg.ConnectError !== undefined) {
-        console.error('Connection error:', msg.ConnectError);
-        
-        // Handle "Already waiting for a range" error gracefully
-        if (msg.ConnectError.includes('Already waiting for a range')) {
-          console.log('Backend is busy processing previous request, will retry when current request completes');
-          // Reset throttling state for all connections since we don't know which one failed
-          for (const connection of this.connections.values()) {
-            connection.onEventRequestError();
+      if (typeof event.data === 'string') {
+        const msg = JSON.parse(event.data);
+
+        if (msg.DiscoveredClients !== undefined) {
+          this.discoveredClients = msg.DiscoveredClients.clients;
+        }
+        else if (msg.Connected !== undefined) {
+          const { id, addr } = msg.Connected;
+          console.log('Connected to client:', id, addr);
+        }
+        else if (msg.ConnectError !== undefined) {
+          console.error('Connection error:', msg.ConnectError);
+
+          // Handle "Already waiting for a range" error gracefully
+          if (msg.ConnectError.includes('Already waiting for a range')) {
+            console.log('Backend is busy processing previous request, will retry when current request completes');
+            // Reset throttling state for all connections since we don't know which one failed
+            for (const connection of this.connections.values()) {
+              connection.onEventRequestError();
+            }
+          } else {
+            alert('Connection error: ' + msg.ConnectError);
           }
-        } else {
-          alert('Connection error: ' + msg.ConnectError);
-        }
-      } else if (msg.ActiveConnections !== undefined) {
-        this.activeConnections = msg.ActiveConnections;
-      } else if (msg.Addressed !== undefined) {
-        const { id, message } = msg.Addressed;
-        
-        if (message.NewEvents !== undefined) {
-          this.handleNewEvents(id, message.NewEvents);
-        }
-        else if (message.ConnectionTimestamps !== undefined) {
-          this.getOrCreateConnection(id).setTimestamps(message.ConnectionTimestamps);
+        } else if (msg.ActiveConnections !== undefined) {
+          this.activeConnections = msg.ActiveConnections;
+        } else if (msg.Addressed !== undefined) {
+          const { id, message } = msg.Addressed;
+
+          if (message.NewEventsHeader !== undefined) {
+            this.newEventsHeader = message.NewEventsHeader;
+            this.newEventsHeader.id = id;
+          }
+          else if (message.ConnectionTimestamps !== undefined) {
+            this.getOrCreateConnection(id).setTimestamps(message.ConnectionTimestamps);
+          }
+          else {
+            console.warn('Unknown message in Addressed:', message);
+          }
         }
         else {
-            console.warn('Unknown message in Addressed:', message);
+          console.warn('Unknown message type:', msg);
         }
       }
       else {
-        console.warn('Unknown message type:', msg);
+        let eventsHeader = this.newEventsHeader;
+        if (eventsHeader) {
+          event.data.arrayBuffer().then(buffer => {
+            let thread_ord_id = eventsHeader.thread_ord_id;
+            let id = eventsHeader.id;
+            const view = new DataView(buffer);
+            let msg_id = view.getUint32(view.byteLength - 4, true);
+            if (msg_id !== eventsHeader.msg_id) {
+              console.error(`Invalid message id! Expected ${eventsHeader.msg_id}, got ${msg_id}`);
+            }
+            else {
+              this.handleNewEvents(id, thread_ord_id, view)
+            }
+          })
+          this.newEventsHeader = null;
+        }
       }
-      
     } catch (error) {
       console.error('Error parsing WebSocket message:', error);
     }
   };
 
-  handleNewEvents = (connectionId, newEvents) => {
-    const startTime = performance.now();
-    
-    const { data, thread_ord_id } = newEvents;
-    const addr = `client-${connectionId}`;
+  handleNewEvents = (connectionId, thread_ord_id, view) => {
+    let s = trace.start();
 
-    const uint8Array = new Uint8Array(data);
-    const view = new DataView(uint8Array.buffer);
     let offset = 0;
 
     // Parse events for canvas rendering
@@ -145,7 +163,7 @@ class WebSocketStore {
     }
 
     // Parse Range Events
-    while (offset < data.length) {
+    while (offset < view.byteLength - 4) {
       const start = Number(view.getBigUint64(offset, true));
       offset += 8;
       const end = Number(view.getBigUint64(offset, true));
@@ -164,13 +182,13 @@ class WebSocketStore {
       });
     }
 
+    trace.end(s, "parse raw events")
+
     // Update OpenGL buffers directly
     const connection = this.getOrCreateConnection(connectionId);
     connection.updateCanvasData(thread_ord_id, instantEvents, rangeEvents);
-    
-    const endTime = performance.now();
-    console.log(`Message processing time for connection ${connectionId}, thread ${thread_ord_id}: ${(endTime - startTime).toFixed(2)}ms (${instantEvents.length} instant, ${rangeEvents.length} range events)`);
-    
+
+
     // Notify connection that request is complete (for throttling)
     connection.onEventRequestComplete();
   };
@@ -226,8 +244,8 @@ class WebSocketStore {
     const endInt = Math.floor(end);
     
     console.log(`Auto-requesting events for connection ${connectionId}: ${startInt} - ${endInt}`);
-    
-    this.sendMessage(JSON.stringify({ 
+
+    this.sendMessage(JSON.stringify({
       "RequestNewRange": {
         "conn_id": connectionId,
         "start": startInt,

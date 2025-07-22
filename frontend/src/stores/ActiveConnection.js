@@ -29,8 +29,7 @@ class ActiveConnection {
   // Rendering state
   isRendering = false;
   animationFrameId = null;
-  needsRedraw = false;
-  
+
   // Scroll/zoom state - independent of backend data
   currentView = { start: 0, end: 100000 }; // Current view window (scrolled/zoomed)
   
@@ -52,6 +51,7 @@ class ActiveConnection {
     makeAutoObservable(this);
   }
 
+  // Update timestamp information
   setTimestamps(timestamps) {
     const isFirstTime = !this.timestamps;
     
@@ -68,6 +68,7 @@ class ActiveConnection {
     }
   }
 
+  // External actions
   resetViewToData() {
     if (!this.timestamps) return;
     
@@ -89,13 +90,12 @@ class ActiveConnection {
       };
       console.log(`View reset to full range: ${this.timestamps.min} - ${this.timestamps.max}`);
     }
-    
-    this.needsRedraw = true;
-    
+
     // Force immediate request since this is initial setup
     this.executeEventRequest();
   }
 
+  // Events requests
   scheduleEventRequest() {
     if (this.isRequestingEvents) {
       // Save the current view as pending request
@@ -109,7 +109,6 @@ class ActiveConnection {
     // Execute request immediately
     this.executeEventRequest();
   }
-
   executeEventRequest() {
     if (this.isRequestingEvents) return;
 
@@ -121,7 +120,6 @@ class ActiveConnection {
       this.onRequestEvents(this.id, this.currentView.start, this.currentView.end);
     }
   }
-
   onEventRequestComplete() {
     this.isRequestingEvents = false;
     
@@ -132,7 +130,6 @@ class ActiveConnection {
       this.executeEventRequest();
     }
   }
-
   onEventRequestError() {
     // Reset requesting state on error so we can try again
     this.isRequestingEvents = false;
@@ -141,6 +138,7 @@ class ActiveConnection {
     console.log(`Event request failed for connection ${this.id}, throttling reset`);
   }
 
+  // Canvas
   setCanvasRef(canvas) {
     this.canvasRef = canvas;
     if (canvas) {
@@ -150,7 +148,32 @@ class ActiveConnection {
       console.log(`Canvas reference set for connection ${this.id}, ready for WebGL rendering`);
     }
   }
+  removeCanvasRef() {
+    // Clean up resize observer
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
 
+    this.cleanup();
+    this.canvasRef = null;
+    console.log(`Canvas reference removed for connection ${this.id}`);
+  }
+  setupCanvasEvents() {
+    if (!this.canvasRef) return;
+
+    this.canvasRef.addEventListener('wheel', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = this.canvasRef.getBoundingClientRect();
+        const mouseX = (e.clientX - rect.left) / rect.width;
+        this.handleZoom(e.deltaY, mouseX);
+      }
+    });
+  }
+
+
+  // Canvas resizing
   setupResizeObserver() {
     if (!this.canvasRef) return;
 
@@ -164,7 +187,6 @@ class ActiveConnection {
     
     this.resizeObserver.observe(this.canvasRef);
   }
-
   updateCanvasSize() {
     if (!this.canvasRef || !this.gl) return;
 
@@ -187,39 +209,24 @@ class ActiveConnection {
         this.gl.uniform2f(canvasSizeLocation, displayWidth, displayHeight);
       }
 
-      this.needsRedraw = true;
       console.log(`Canvas resized for connection ${this.id}: ${displayWidth}x${displayHeight}`);
     }
   }
 
-  setupCanvasEvents() {
-    if (!this.canvasRef) return;
-
-    this.canvasRef.addEventListener('wheel', (e) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const rect = this.canvasRef.getBoundingClientRect();
-        const mouseX = (e.clientX - rect.left) / rect.width;
-        this.handleZoom(e.deltaY, mouseX);
-      }
-    });
-  }
-
+  // Zooming/panning
   handleHorizontalScroll(deltaY) {
     const currentRange = this.currentView.end - this.currentView.start;
     const scrollAmount = currentRange * 0.1 * Math.sign(deltaY);
     
     this.currentView.start += scrollAmount;
     this.currentView.end += scrollAmount;
-    this.needsRedraw = true;
-    
+
     // Auto-request events for new view
     this.scheduleEventRequest();
   }
-
   handleZoom(deltaY, mouseX) {
     const currentRange = this.currentView.end - this.currentView.start;
-    const zoomFactor = deltaY > 0 ? 1.2 : 0.8; // Zoom out or in
+    const zoomFactor = deltaY > 0 ? 1.1 : 0.9; // Zoom out or in
     const newRange = currentRange * zoomFactor;
     
     // Don't zoom too small
@@ -243,24 +250,13 @@ class ActiveConnection {
     
     this.currentView.start = newStart;
     this.currentView.end = newEnd;
-    this.needsRedraw = true;
-    
+
     // Auto-request events for new view
     this.scheduleEventRequest();
   }
 
-  removeCanvasRef() {
-    // Clean up resize observer
-    if (this.resizeObserver) {
-      this.resizeObserver.disconnect();
-      this.resizeObserver = null;
-    }
-    
-    this.cleanup();
-    this.canvasRef = null;
-    console.log(`Canvas reference removed for connection ${this.id}`);
-  }
 
+  // Webgl
   initWebGL() {
     if (!this.canvasRef) return;
 
@@ -277,7 +273,6 @@ class ActiveConnection {
 
     this.initShaders();
   }
-
   initShaders() {
     if (!this.gl) return;
 
@@ -354,7 +349,6 @@ class ActiveConnection {
     // Start continuous rendering
     this.startRendering();
   }
-
   compileShader(source, type) {
     const shader = this.gl.createShader(type);
     this.gl.shaderSource(shader, source);
@@ -369,13 +363,11 @@ class ActiveConnection {
 
     return shader;
   }
-
   startRendering() {
     if (this.isRendering) return;
     
     this.isRendering = true;
-    this.needsRedraw = true;
-    
+
     const renderLoop = () => {
       if (!this.isRendering || !this.gl) return;
       
@@ -386,7 +378,6 @@ class ActiveConnection {
     renderLoop();
     console.log(`Started continuous rendering for connection ${this.id}`);
   }
-
   stopRendering() {
     this.isRendering = false;
     if (this.animationFrameId) {
@@ -395,13 +386,10 @@ class ActiveConnection {
     }
     console.log(`Stopped rendering for connection ${this.id}`);
   }
-
   render() {
     if (!this.gl || !this.shaderProgram) return;
 
-    // Time-based clear color animation
-    // const time = performance.now() * 0.001; // Convert to seconds
-
+    let s = trace.start();
     const r = 0.13333;
     const g = 0.129;
     const b = 0.196;
@@ -412,11 +400,7 @@ class ActiveConnection {
     
     // Render instant events as triangles for all threads
     this.renderAllThreads();
-    
-    // Always redraw for continuous animation
-    this.needsRedraw = true;
   }
-
   initBuffers() {
     if (!this.gl) return;
     
@@ -441,7 +425,6 @@ class ActiveConnection {
     
     this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
   }
-
   initUniforms() {
     if (!this.gl || !this.shaderProgram) return;
 
@@ -451,29 +434,18 @@ class ActiveConnection {
     const triangleSizeLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_triangleSize');
     this.gl.uniform2f(triangleSizeLocation, 16.0, 20.0); // 16px wide, 20px tall
   }
-
   updateCanvasData(thread_ord_id, instantEvents, rangeEvents) {
-    let s = trace.start();
     if (!this.gl || !this.shaderProgram) {
       console.log(`WebGL not ready for connection ${this.id}`);
       return;
     }
 
-    console.log(`Canvas data updated for connection ${this.id}, thread ${thread_ord_id}`, {
-      instantEvents: instantEvents.length,
-      rangeEvents: rangeEvents.length
-    });
-
     // Update buffers for this specific thread
     this.updateThreadBuffers(thread_ord_id, instantEvents);
-    
-    // Mark that we need to redraw
-    this.needsRedraw = true;
-    trace.end(s, "updateCanvasData")
   }
-
   updateThreadBuffers(thread_ord_id, instantEvents) {
     if (!this.gl || !this.timestamps) return;
+    let s = trace.start();
 
     const eventCount = instantEvents.length;
 
@@ -489,6 +461,7 @@ class ActiveConnection {
         this.threadBuffers.set(thread_ord_id, threadData);
       }
       threadData.count = 0;
+      trace.end(s, "updateThreadBuffers")
       return;
     }
 
@@ -532,8 +505,8 @@ class ActiveConnection {
     this.gl.bufferData(this.gl.ARRAY_BUFFER, colors, this.gl.DYNAMIC_DRAW);
     
     threadData.count = eventCount;
+    trace.end(s, "updateThreadBuffers")
   }
-
   renderAllThreads() {
     if (!this.gl || !this.shaderProgram || this.threadBuffers.size === 0) return;
 
@@ -602,7 +575,6 @@ class ActiveConnection {
     this.gl.disableVertexAttribArray(positionLocation);
     this.gl.disableVertexAttribArray(colorLocation);
   }
-
   cleanup() {
     // Stop rendering loop
     this.stopRendering();

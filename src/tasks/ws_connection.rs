@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use log::{error, info, warn};
 use tokio::time::interval;
@@ -15,6 +16,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
 
     let start_time = Instant::now();
 
+    let mut last_msg_id = 0;
 
     let mut is_channel_registered = false;
     let (mut dummy_tx, dummy_rx) = tokio::sync::mpsc::channel(1);
@@ -127,12 +129,18 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
             }
             res = event_data_rx_channel.recv() => {
                 match res {
-                    Some((thread_ord_id, data)) => {
-                        let msg = MessageFromServer::addressed(current_sparkles_id, AddressedMessageFromServer::NewEvents {
+                    Some((thread_ord_id, mut data)) => {
+                        let msg_id = last_msg_id;
+                        last_msg_id += 1;
+
+                        let msg = MessageFromServer::addressed(current_sparkles_id, AddressedMessageFromServer::NewEventsHeader {
                             thread_ord_id,
-                            data
+                            msg_id,
                         });
                         let _ = send_websocket(&mut socket, msg).await;
+                        let msg_id_le = msg_id.to_le_bytes();
+                        data.extend_from_slice(&msg_id_le);
+                        let _ = send_websocket_bytes(&mut socket, data.into()).await;
                     }
                     None => {
                         let msg = MessageFromServer::addressed(current_sparkles_id, AddressedMessageFromServer::EventsFinished);
@@ -153,6 +161,11 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
 async fn send_websocket(socket: &mut WebSocket, msg: MessageFromServer) -> anyhow::Result<()> {
     let json = serde_json::to_string(&msg)?;
     socket.send(Message::Text(Utf8Bytes::from(json))).await?;
+    Ok(())
+}
+
+async fn send_websocket_bytes(socket: &mut WebSocket, bytes: Bytes) -> anyhow::Result<()> {
+    socket.send(Message::Binary(bytes)).await?;
     Ok(())
 }
 
@@ -200,9 +213,9 @@ impl MessageFromServer {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum AddressedMessageFromServer {
-    NewEvents {
+    NewEventsHeader {
         thread_ord_id: u64,
-        data: Vec<u8>,
+        msg_id: u32,
     },
     EventsFinished,
     ConnectionTimestamps {
