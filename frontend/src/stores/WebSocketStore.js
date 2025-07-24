@@ -1,4 +1,4 @@
-import { makeAutoObservable } from 'mobx';
+import { makeAutoObservable, action } from 'mobx';
 import ActiveConnection from './ActiveConnection.js';
 import trace from "../trace.js";
 
@@ -30,24 +30,24 @@ class WebSocketStore {
       
       this.socket = new WebSocket(wsUrl);
       
-      this.socket.onopen = () => {
+      this.socket.onopen = action(() => {
         console.log('WebSocket connected');
         this.isConnected = true;
         if (this.reconnectTimeout) {
           clearTimeout(this.reconnectTimeout);
           this.reconnectTimeout = null;
         }
-      };
+      });
 
       this.socket.onmessage = (event) => {
         this.handleMessage(event);
       };
 
-      this.socket.onclose = () => {
+      this.socket.onclose = action(() => {
         console.log('WebSocket disconnected, trying to reconnect...');
         this.isConnected = false;
         this.scheduleReconnect();
-      };
+      });
 
       this.socket.onerror = (error) => {
         console.error('WebSocket error:', error);
@@ -85,7 +85,6 @@ class WebSocketStore {
 
           // Handle "Already waiting for a range" error gracefully
           if (msg.ConnectError.includes('Already waiting for a range')) {
-            console.log('Backend is busy processing previous request, will retry when current request completes');
             // Reset throttling state for all connections since we don't know which one failed
             for (const connection of this.connections.values()) {
               connection.onEventRequestError();
@@ -95,6 +94,45 @@ class WebSocketStore {
           }
         } else if (msg.ActiveConnections !== undefined) {
           this.activeConnections = msg.ActiveConnections;
+          
+          // Update connection status and thread names from server data
+          for (const connectionInfo of msg.ActiveConnections) {
+            const connection = this.getOrCreateConnection(connectionInfo.id);
+            if (connection) {
+              const wasOnline = connection.isOnline;
+              
+              // Update online status
+              connection.isOnline = connectionInfo.online;
+              
+              // Handle offline connections - disable scrolling completely
+              if (!connection.isOnline) {
+                // Always disable scrolling for offline connections
+                connection.isScrollingEnabled = false;
+                connection.isLocked = true; // Reset to default locked state
+              } else if (!wasOnline) {
+                // Connection just came online - set initial scrolling state
+                // Enable scrolling only if no other online connection has it enabled
+                const otherOnlineConnections = msg.ActiveConnections.filter(c => c.online && c.id !== connectionInfo.id);
+                const hasOtherScrollingConnection = otherOnlineConnections.some(c => {
+                  const otherConn = this.getConnection(c.id);
+                  return otherConn && otherConn.isScrollingEnabled;
+                });
+                
+                if (!hasOtherScrollingConnection) {
+                  connection.isScrollingEnabled = true;
+                  connection.isLocked = true; // Default to locked
+                }
+              }
+              // If connection was already online, preserve user's scrolling choice
+              
+              // Apply thread names from server
+              if (connectionInfo.thread_names) {
+                for (const [threadId, threadName] of Object.entries(connectionInfo.thread_names)) {
+                  connection.setThreadName(parseInt(threadId), threadName);
+                }
+              }
+            }
+          }
         } else if (msg.Addressed !== undefined) {
           const { id, message } = msg.Addressed;
 
@@ -104,6 +142,9 @@ class WebSocketStore {
           }
           else if (message.ConnectionTimestamps !== undefined) {
             this.getOrCreateConnection(id).setTimestamps(message.ConnectionTimestamps);
+          }
+          else if (message === "EventsFinished") {
+            // nothing
           }
           else {
             console.warn('Unknown message in Addressed:', message);
@@ -125,7 +166,8 @@ class WebSocketStore {
               console.error(`Invalid message id! Expected ${eventsHeader.msg_id}, got ${msg_id}`);
             }
             else {
-              this.handleNewEvents(id, thread_ord_id, view)
+              let conn = this.getOrCreateConnection(id)
+              conn.handleNewEvents(thread_ord_id, view, eventsHeader.stats)
             }
           })
           this.newEventsHeader = null;
@@ -136,68 +178,11 @@ class WebSocketStore {
     }
   };
 
-  handleNewEvents = (connectionId, thread_ord_id, view) => {
-    let s = trace.start();
-
-    let offset = 0;
-
-    // Parse events for canvas rendering
-    const instantEvents = [];
-    const rangeEvents = [];
-
-    const instantEventsLen = view.getUint32(offset, true);
-    offset += 4;
-    const instantEventsEnd = offset + instantEventsLen;
-
-    while (offset < instantEventsEnd) {
-      const tm = Number(view.getBigUint64(offset, true));
-      offset += 8;
-      const eventId = view.getUint8(offset);
-      offset += 1;
-
-      instantEvents.push({
-        timestamp: tm,
-        event_id: eventId,
-        color_seed: `instant-${thread_ord_id}-${eventId}`
-      });
-    }
-
-    // Parse Range Events
-    while (offset < view.byteLength - 4) {
-      const start = Number(view.getBigUint64(offset, true));
-      offset += 8;
-      const end = Number(view.getBigUint64(offset, true));
-      offset += 8;
-      const start_id = view.getUint8(offset);
-      offset += 1;
-      const end_id = view.getUint8(offset);
-      offset += 1;
-
-      rangeEvents.push({
-        start_timestamp: start,
-        end_timestamp: end,
-        start_event_id: start_id,
-        end_event_id: end_id,
-        color_seed: `range-${thread_ord_id}-${start_id}`
-      });
-    }
-
-    trace.end(s, "parse raw events")
-
-    // Update OpenGL buffers directly
-    const connection = this.getOrCreateConnection(connectionId);
-    connection.updateCanvasData(thread_ord_id, instantEvents, rangeEvents);
-
-
-    // Notify connection that request is complete (for throttling)
-    connection.onEventRequestComplete();
-  };
-
-
   // Handy wrapper for accessing connections with automatic creation
   getOrCreateConnection = (connectionId) => {
     if (!this.connections.has(connectionId)) {
       const connection = new ActiveConnection(connectionId);
+      
       // Set up auto-request callback
       connection.onRequestEvents = (id, start, end) => {
         this.autoRequestEvents(id, start, end);
@@ -225,17 +210,28 @@ class WebSocketStore {
     this.sendMessage(JSON.stringify({ "Connect": { "addr": addr } }));
   };
 
-  // Canvas ref methods - direct delegation to connection
-  setCanvasRef = (connectionId, canvas) => {
-    this.getOrCreateConnection(connectionId).setCanvasRef(canvas);
+  // Canvas ref methods - direct delegation to connection (now per-thread)
+  setCanvasRef = (connectionId, thread_ord_id, canvas) => {
+    this.getOrCreateConnection(connectionId).setCanvasRef(thread_ord_id, canvas);
   };
 
-  removeCanvasRef = (connectionId) => {
-    this.getConnection(connectionId)?.removeCanvasRef();
+  removeCanvasRef = (connectionId, thread_ord_id) => {
+    this.getConnection(connectionId)?.removeCanvasRef(thread_ord_id);
   };
 
   resetConnectionView = (connectionId) => {
     this.getConnection(connectionId)?.resetViewToData();
+  };
+
+  setThreadName = (connectionId, threadId, name) => {
+    console.log(`Setting thread name for connection ${connectionId}, thread ${threadId}: ${name}`);
+    this.sendMessage(JSON.stringify({
+      "SetThreadName": {
+        "conn_id": connectionId,
+        "thread_id": threadId,
+        "name": name
+      }
+    }));
   };
 
   autoRequestEvents = (connectionId, start, end) => {
@@ -243,7 +239,6 @@ class WebSocketStore {
     const startInt = Math.floor(start);
     const endInt = Math.floor(end);
     
-    console.log(`Auto-requesting events for connection ${connectionId}: ${startInt} - ${endInt}`);
 
     this.sendMessage(JSON.stringify({
       "RequestNewRange": {
@@ -255,7 +250,7 @@ class WebSocketStore {
   };
 
   // Cleanup
-  disconnect = () => {
+  disconnect = action(() => {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
@@ -265,7 +260,7 @@ class WebSocketStore {
       this.socket = null;
     }
     this.isConnected = false;
-  };
+  });
 }
 
 export default WebSocketStore;

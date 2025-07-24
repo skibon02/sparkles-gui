@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -6,6 +6,7 @@ use std::time::Instant;
 use parking_lot::Mutex;
 use sparkles_parser::TracingEventId;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use crate::tasks::sparkles_connection::EventsSkipStats;
 use crate::tasks::sparkles_connection::storage::StorageStats;
 
 #[derive(Clone)]
@@ -16,6 +17,7 @@ pub struct SparklesWebsocketShared {
 pub struct SparklesWebsocketSharedInner {
     sparkles_connections: HashMap<u32, (UnboundedSender<(u32, WsToSparklesMessage)>, SocketAddr)>,
     ws_connections: HashMap<u32, UnboundedSender<(u32, SparklesToWsMessage)>>,
+    disconnected_connections: HashSet<u32>, // Track disconnected connections
 
     new_sparkles_connection_id: u32,
     new_ws_connection_id: u32,
@@ -31,6 +33,7 @@ impl SparklesWebsocketSharedInner {
         Self {
             sparkles_connections: HashMap::new(),
             ws_connections: HashMap::new(),
+            disconnected_connections: HashSet::new(),
             new_sparkles_connection_id: 0,
             new_ws_connection_id: 0,
             control_msg_rx: Some(control_msg_rx),
@@ -92,6 +95,24 @@ impl SparklesWebsocketShared {
             .map(|(&id, &(ref _sender, addr))| (id, addr))
             .collect()
     }
+    
+    pub fn all_sparkles_connections(&self) -> Vec<(u32, SocketAddr, bool)> {
+        let guard = self.inner.lock();
+        let mut connections = Vec::new();
+        
+        // Add online connections
+        for (&id, &(ref _sender, addr)) in guard.sparkles_connections.iter() {
+            let online = !guard.disconnected_connections.contains(&id);
+            connections.push((id, addr, online));
+        }
+        
+        connections
+    }
+    
+    pub fn mark_connection_disconnected(&self, connection_id: u32) {
+        let mut guard = self.inner.lock();
+        guard.disconnected_connections.insert(connection_id);
+    }
 }
 
 pub struct WsConnection {
@@ -147,6 +168,13 @@ impl WsConnection {
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
+    pub async fn set_thread_name(&mut self, id: u32, thread_id: u64, name: String) -> anyhow::Result<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let msg = WsToSparklesMessage::SetThreadName { thread_id, name, resp: sender };
+        self.send_message(id, msg)?;
+        receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
+    }
+
     pub async fn get_event_names(&mut self, id: u32, thread: u64) -> anyhow::Result<HashMap<TracingEventId, Arc<str>>> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let msg = WsToSparklesMessage::GetEventNames { thread, resp: sender };
@@ -168,7 +196,7 @@ impl WsConnection {
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn request_new_events(&mut self, id: u32, start: u64, end: u64) -> anyhow::Result<tokio::sync::mpsc::Receiver<(u64, Vec<u8>)>> {
+    pub async fn request_new_events(&mut self, id: u32, start: u64, end: u64) -> anyhow::Result<tokio::sync::mpsc::Receiver<(u64, Vec<u8>, EventsSkipStats)>> {
         let (sender, receiver) = tokio::sync::mpsc::channel(5);
         let msg = WsToSparklesMessage::RequestNewRange { start, end, events_channel: sender };
         self.send_message(id, msg)?;
@@ -253,6 +281,11 @@ pub enum WsToSparklesMessage {
     GetThreadNames {
         resp: tokio::sync::oneshot::Sender<HashMap<u64, String>>,
     },
+    SetThreadName {
+        thread_id: u64,
+        name: String,
+        resp: tokio::sync::oneshot::Sender<()>,
+    },
     GetEventNames {
         thread: u64,
         resp: tokio::sync::oneshot::Sender<HashMap<TracingEventId, Arc<str>>>,
@@ -260,7 +293,7 @@ pub enum WsToSparklesMessage {
     RequestNewRange {
         start: u64,
         end: u64,
-        events_channel: tokio::sync::mpsc::Sender<(u64, Vec<u8>)>,
+        events_channel: tokio::sync::mpsc::Sender<(u64, Vec<u8>, EventsSkipStats)>,
     },
     GetConnectionTimestamps {
         resp: tokio::sync::oneshot::Sender<Option<(u64, u64, u64)>>,

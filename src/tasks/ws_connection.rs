@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use axum::body::Bytes;
@@ -5,12 +6,13 @@ use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use log::{error, info, warn};
 use tokio::time::interval;
 use crate::shared::WsConnection;
+use crate::tasks::sparkles_connection::EventsSkipStats;
 use crate::tasks::sparkles_connection::storage::StorageStats;
 use crate::tasks::web_server::DiscoveryShared;
 
 pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, mut conn: WsConnection) -> anyhow::Result<()> {
     info!("New WebSocket connection: {}", conn.id());
-    let mut send_ticker = interval(Duration::from_secs(2));
+    let mut discover_list_ticker = interval(Duration::from_millis(400));
     let mut active_connections_ticker = interval(Duration::from_millis(100));
     let mut sync_ticker = interval(Duration::from_millis(200));
 
@@ -60,6 +62,16 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                                                 is_channel_registered = true;
                                             }
                                         }
+                                        MessageToServer::SetThreadName { conn_id, thread_id, name } => {
+                                            match conn.set_thread_name(conn_id, thread_id, name.clone()).await {
+                                                Ok(_) => {
+                                                    info!("Thread name set for connection {}, thread {}: {}", conn_id, thread_id, name);
+                                                }
+                                                Err(e) => {
+                                                    warn!("Failed to set thread name: {}", e);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -87,7 +99,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                     return Ok(());
                 };
             }
-            _ = send_ticker.tick() => {
+            _ = discover_list_ticker.tick() => {
                 let clients = shared_data.0.lock().discovered_clients.clone();
                 let msg = MessageFromServer::DiscoveredClients {clients};
                 let json = match serde_json::to_string(&msg) {
@@ -101,22 +113,33 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                 let _ = send_websocket(&mut socket, msg).await;
             }
             _ = active_connections_ticker.tick() => {
-                let clients = conn.active_sparkles_connections();
+                let clients = conn.all_sparkles_connections();
                 let mut conns = Vec::new();
 
-                for (id, addr) in clients {
-                    let stats = conn.get_storage_stats(id).await?;
+                for (id, addr, online) in clients {
+                    let stats = if online {
+                        conn.get_storage_stats(id).await.unwrap_or_default()
+                    } else {
+                        StorageStats::default()
+                    };
+                    let thread_names = if online {
+                        conn.get_thread_names(id).await.unwrap_or_default()
+                    } else {
+                        HashMap::new()
+                    };
                     conns.push(ActiveConnectionInfo {
                         id,
                         addr,
-                        stats
+                        stats,
+                        thread_names,
+                        online,
                     })
                 }
                 let _ = send_websocket(&mut socket, MessageFromServer::ActiveConnections(conns)).await;
             }
             _ = sync_ticker.tick() => {
-                let connection_ids = conn.active_sparkles_connections();
-                for (id, addr) in connection_ids {
+                let connections = conn.active_sparkles_connections();
+                for (id, addr) in connections {
                     if let Ok(Some((min_tm, max_tm, current_tm))) = conn.get_connection_timestamps(id).await {
                         let msg = MessageFromServer::addressed(id, AddressedMessageFromServer::ConnectionTimestamps { 
                             min: min_tm, 
@@ -129,13 +152,14 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
             }
             res = event_data_rx_channel.recv() => {
                 match res {
-                    Some((thread_ord_id, mut data)) => {
+                    Some((thread_ord_id, mut data, stats)) => {
                         let msg_id = last_msg_id;
                         last_msg_id += 1;
 
                         let msg = MessageFromServer::addressed(current_sparkles_id, AddressedMessageFromServer::NewEventsHeader {
                             thread_ord_id,
                             msg_id,
+                            stats
                         });
                         let _ = send_websocket(&mut socket, msg).await;
                         let msg_id_le = msg_id.to_le_bytes();
@@ -179,6 +203,11 @@ pub enum MessageToServer {
         start: u64,
         end: u64,
     },
+    SetThreadName {
+        conn_id: u32,
+        thread_id: u64,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -186,6 +215,8 @@ pub struct ActiveConnectionInfo {
     id: u32,
     addr: SocketAddr,
     stats: StorageStats,
+    thread_names: HashMap<u64, String>,
+    online: bool,
 }
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum MessageFromServer {
@@ -216,6 +247,7 @@ pub enum AddressedMessageFromServer {
     NewEventsHeader {
         thread_ord_id: u64,
         msg_id: u32,
+        stats: EventsSkipStats
     },
     EventsFinished,
     ConnectionTimestamps {

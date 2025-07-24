@@ -1,0 +1,298 @@
+@use '../../index.scss' as *;
+
+.connection-canvas {
+    width: 100%;
+    height: var(--canvas-height, 60px);
+    display: block;
+    margin-top: 10px;
+}
+
+.reset-btn {
+    margin-left: 8px;
+    @include text-shadow();
+
+    &:hover {
+        background-color: $btn-hover;
+    }
+}
+
+.scroll-btn-container {
+    display: inline-flex;
+    margin-left: 8px;
+}
+
+.scroll-btn {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    position: relative;
+    z-index: 1;
+
+    &:active {
+        @include button-active-state;
+        z-index: 1;
+    }
+
+    &.scroll-on {
+        @include button-variant($btn-scroll-on);
+    }
+
+    &.scroll-off {
+        @include button-variant($btn-scroll-off);
+    }
+}
+
+.lock-btn {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-left: none;
+    margin-left: 0;
+    padding: 0 8px;
+    min-width: 32px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 2;
+
+    &:active {
+        @include button-active-state;
+    }
+
+    &.lock-locked {
+        @include button-variant($btn-lock-locked);
+    }
+
+    &.lock-unlocked {
+        @include button-variant($btn-lock-unlocked);
+    }
+}
+
+.lock-icon {
+    width: 24px;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+}
+
+.connection-cont,
+.threads-cont {
+    margin-top: 50px;
+    padding-bottom: 5px;
+    overflow: hidden;
+    position: relative;
+}
+
+.connection-cont {
+    &.connection-offline {
+        .connection-header {
+            border-bottom-color: #666;
+        }
+
+        .addr {
+            color: #999;
+        }
+    }
+}
+
+.connection-header,
+.threads-header {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    border-bottom: 2px solid $main;
+    padding-left: 15px;
+}
+
+.connection-body {
+    position: relative;
+    padding-top: 8px;
+    margin-left: 50px;
+    border-left: 2px solid $main;
+}
+
+.connection-stats {
+    display: flex;
+    padding-left: 20px;
+    gap: 20px;
+    font-size: 0.9em;
+    flex-wrap: wrap;
+    color: $text-secondary;
+}
+
+.expand-btn {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform: translateY(-.72em) translateX(-.585em);
+    color: $main;
+    transition: 0.2s transform;
+    cursor: pointer;
+
+    &.expanded {
+        transform: translateY(-.75em) translateX(-.63em) rotate(45deg);
+    }
+}
+
+.thread-joint {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    transform: translateX(-0.46em) translateY(0.85em);
+}
+
+.badge {
+    padding: 5px 8px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    display: inline-block;
+
+    &.badge-primary {
+        background-color: $badge-bg;
+    }
+}
+
+
+.expandable-content {
+    transition: max-height 0.3s ease-out;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    margin-left: -15px;
+    padding-left: 15px;
+
+    &.collapsed {
+        /* max-height set via inline styles */
+    }
+
+    &.expanded {
+        /* max-height set via inline styles */
+    }
+}
+
+.threads-header {
+    font-size: .8em;
+    padding-bottom: 0;
+    border-width: 1px;
+}
+
+.thread-item {
+    margin-bottom: 10px;
+
+    &:last-child {
+        margin-bottom: 0;
+    }
+}
+
+.zoom-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0;
+    padding: 4px 0;
+    font-size: 0.85em;
+    color: var(--text-accent);
+    position: relative;
+    left: 40%;
+    width: fit-content;
+}
+
+.zoom-scale-bar {
+    height: 2px;
+    background-color: $accent;
+    border-radius: 1px;
+    min-width: 20px;
+    position: relative;
+
+    &::before,
+    &::after {
+        content: '';
+        position: absolute;
+        width: 1px;
+        height: 8px;
+        background-color: $accent;
+        top: -3px;
+    }
+
+    &::before {
+        left: 0;
+    }
+
+    &::after {
+        right: 0;
+    }
+}
+
+.zoom-scale-label {
+    white-space: nowrap;
+    color: $accent;
+}
+
+.start-end-lines {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.vertical-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    pointer-events: none;
+}
+
+.start-line,
+.end-line {
+    background-color: $accent;
+    box-shadow: 0 0 3px $accent;
+
+    .line-label {
+        position: absolute;
+        top: -20px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 10px;
+        font-weight: bold;
+        padding: 2px 4px;
+        border-radius: 2px;
+        white-space: nowrap;
+        font-family: monospace;
+        background-color: $accent;
+        color: white;
+    }
+}
+
+.thread-name {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: background-color 0.2s;
+
+    &:hover {
+        background-color: rgba(255, 255, 255, 0.1);
+    }
+}
+
+.thread-name-input {
+    background: var(--bg-secondary);
+    border: 1px solid $accent;
+    color: var(--text);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: inherit;
+    font-family: inherit;
+    outline: none;
+    min-width: 100px;
+
+    &:focus {
+        border-color: $accent;
+        box-shadow: 0 0 3px rgba(var(--accent-rgb), 0.3);
+    }
+}

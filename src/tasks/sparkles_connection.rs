@@ -30,8 +30,10 @@ pub fn spawn_conn_handler(addr: SocketAddr, conn: SparklesConnection) {
     });
 }
 
+const MAX_EV_CNT: usize = 50_000;
+
 struct ActiveRangeRequest {
-    resp: tokio::sync::mpsc::Sender<(u64, Vec<u8>)>,
+    resp: tokio::sync::mpsc::Sender<(u64, Vec<u8>, EventsSkipStats)>,
     start: u64,
     end: u64,
 }
@@ -71,6 +73,14 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                         resp
                     } => {
                         let _ = resp.send(storage.thread_names.clone());
+                    }
+                    WsToSparklesMessage::SetThreadName {
+                        thread_id,
+                        name,
+                        resp
+                    } => {
+                        storage.thread_names.insert(thread_id, name);
+                        let _ = resp.send(());
                     }
                     WsToSparklesMessage::GetConnectionTimestamps {
                         resp
@@ -174,6 +184,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     let (tx, rx) = tokio::sync::mpsc::channel(1);
 
                     is_disconnected = true;
+                    conn.mark_connection_disconnected(conn.id());
                     storage.msg_rx = rx;
                     dummy_tx = tx;
                 }
@@ -190,7 +201,46 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 let mut res_buf = Vec::new();
 
                 let mut buf = Vec::new();
+
+                let instant_event_cnt = thread_storage.request_instant_events(start, end).count();
+
+                let mut prev_event: Option<(u64, TracingEventId)> = None;
+                let skip_thr = (end - start) / 2000; // assume 2000px horizontal resolution, use as skip threshold
+                let mut keep_cnt = 1;
+                let mut skip_cnt = 1;
+                if instant_event_cnt > MAX_EV_CNT {
+                    skip_cnt = (instant_event_cnt + MAX_EV_CNT - 1) / MAX_EV_CNT; // ceil division
+                } else if instant_event_cnt > 0 {
+                    keep_cnt = MAX_EV_CNT / instant_event_cnt;
+                }
+
+                let mut counter = 0;
+                let cycle_len = keep_cnt + skip_cnt;
+                let mut skipped = 0;
                 for (tm, id) in thread_storage.request_instant_events(start, end) {
+                    if let Some((prev_tm, prev_id)) = prev_event {
+                        let tm_diff = tm - prev_tm;
+
+                        let should_keep = if tm_diff < skip_thr {
+                            let keep = counter < keep_cnt;
+                            counter = (counter + 1) % cycle_len;
+                            keep
+                        } else {
+                            counter = 0;
+                            true
+                        };
+
+                        if should_keep {
+                            buf.extend_from_slice(&prev_tm.to_le_bytes());
+                            buf.push(prev_id);
+                        }
+                        else {
+                            skipped += 1;
+                        }
+                    }
+                    prev_event = Some((tm, id));
+                }
+                if let Some((tm, id)) = prev_event {
                     buf.extend_from_slice(&tm.to_le_bytes());
                     buf.push(id);
                 }
@@ -199,21 +249,28 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 res_buf.extend_from_slice(&buf);
 
                 let mut buf = Vec::new();
-                for (start, end, start_id, end_id) in thread_storage.request_range_events(start, end) {
-                    buf.extend_from_slice(&start.to_le_bytes());
-                    buf.extend_from_slice(&end.to_le_bytes());
-                    buf.push(start_id);
-                    if let Some(end_id) = end_id {
-                        buf.push(end_id);
-                    } else {
-                        buf.push(255);
-                    }
-                }
+                // for (start, end, start_id, end_id) in thread_storage.request_range_events(start, end) {
+                //     buf.extend_from_slice(&start.to_le_bytes());
+                //     buf.extend_from_slice(&end.to_le_bytes());
+                //     buf.push(start_id);
+                //     if let Some(end_id) = end_id {
+                //         buf.push(end_id);
+                //     } else {
+                //         buf.push(255);
+                //     }
+                // }
                 res_buf.extend_from_slice(&buf);
+                
+                let stats = EventsSkipStats {
+                    skipped_instant: skipped,
+                    skipped_range: 0,
+                    total_instant: instant_event_cnt,
+                    total_range: 0,
+                };
 
-                info!("Connection manager: sending range request response to {} for thread {}: start={}, end={}, data size={}",
+                info!("Connection manager: sending range request response to {} for thread {}: start={}, end={}, data size={}. Skipped: {skipped}/{instant_event_cnt}",
                         addr, thread_ord_id, start, end, buf.len());
-                resp.send((*thread_ord_id, res_buf)).await?;
+                resp.send((*thread_ord_id, res_buf, stats)).await?;
             }
         }
     }
@@ -276,4 +333,12 @@ enum SparklesConnectionMessage {
         thread_ord_id: u64,
         event_names: HashMap<TracingEventId, Arc<str>>
     },
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EventsSkipStats {
+    skipped_instant: usize,
+    skipped_range: usize,
+    total_instant: usize,
+    total_range: usize,
 }

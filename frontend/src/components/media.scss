@@ -1,0 +1,328 @@
+@use "sass:map";
+@use "sass:list";
+@use "sass:string";
+
+$separator: "$_" !default;
+$device-types: (
+				4k: 2560px,
+				f: 1920px,
+				d1: 1799px,
+				d2: 1600px,
+				flap: 1530px,
+				lap: 1333px,
+				tab: 768px,
+				rmob: 640px,
+				mob: 420px,
+				mimob: 360px,
+) !default;
+
+
+
+@function strip-units($number) {
+	@return $number / ($number * 0 + 1);
+}
+
+@function number($string) { //converts string to number
+	// Matrices
+	$strings: '0' '1' '2' '3' '4' '5' '6' '7' '8' '9';
+	$numbers: 0 1 2 3 4 5 6 7 8 9;
+
+	// Result
+	$result: 0;
+
+	@for $i from 1 through str-length($string) {
+		$character: str-slice($string, $i, $i);
+		$index: index($strings, $character);
+
+		@if not $index {
+			@error "Unknown character `#{$character}`.";
+		}
+
+		$number: nth($numbers, $index);
+		$result: $result * 10 + $number;
+	}
+
+	@return $result;
+}
+
+@function niceval($orig-val) { // trims the number if float part is too long
+	$str-val: str-slice("" + $orig-val, 0, - str-length(unit($orig-val)));
+	$dot-pos: str-index($str-val, ".");
+	@if $dot-pos == null {
+		@return $orig-val;
+	}
+	@else {
+		$int-part: str-slice($str-val, 0, $dot-pos - 1);
+		$float-part: str-slice($str-val, $dot-pos + 1, -2);
+		@if str-length($int-part) >= 4 {
+			@return $int-part + unit($orig-val);
+		}
+
+		@return unquote($int-part + "." + str-slice($float-part, 0, 4 - str-length($int-part)) + unit($orig-val));
+	}
+}
+
+@function getcalc($fir-width, $sec-width, $fir-val, $sec-val) {
+	@if $fir-val == $sec-val {
+		@return $fir-val;
+	}
+	$k: 0;
+	$l: 0;
+	$k: strip-units($fir-val - $sec-val) / strip-units($fir-width - $sec-width);
+	$k: strip-units($k);
+	$l: $fir-val - $k * strip-units($fir-width);
+	$k: $k * 100vw;
+
+	@return unquote("calc(" + niceval($k) + " + " + niceval($l) + ")");
+}
+
+
+@function propcalc($width, $val) {
+	@return niceval($val / $width * 100vw);
+}
+
+@function decode-width($dev-type) {	//DETECTING  (returns only resolved device width number)
+	//full match
+	@if map-has-key($device-types, $dev-type) {
+		@return map-get($device-types, $dev-type);
+	}
+	//match with -pr
+	@if map-has-key($device-types, str-slice("" + $dev-type, 0, -4)) and str-slice($dev-type, -3) == "-pr" {
+		@return map-get($device-types, str-slice($dev-type, 0, -4));
+	}
+	// number with -pr
+	@if str-slice("" + $dev-type, -3) == "-pr" {
+		@return number(str-slice("" + $dev-type, 0, -4)) * 1px;
+	}
+	//number
+	@return $dev-type * 1px;
+}
+
+@mixin -add-range($min, $max, $prop, $val) {
+	@if type-of($val) == 'string' {
+		$val: unquote($val);
+	}
+	@if $max == false {
+		@media only screen and (min-width: #{$min+1}) {
+			& {
+				#{$prop}: $val;
+			}
+		}
+	}
+	@else if $min == false or $min == 0px {
+		@media only screen and (max-width: #{$max}) {
+			& {
+				#{$prop}: $val;
+			}
+		}
+	}
+	@else {
+		@media only screen and (min-width: #{$min+1}) and (max-width: #{$max}) {
+			& {
+				#{$prop}: $val;
+			}
+		}
+	}
+}
+
+@function -resolve-range($from, $to, $from-val, $to-val) {
+	$resolved-range: ();
+	@debug "---- new range from " + $from + " to " + $to;
+
+	@debug "inputs: " + type-of($from-val) + " to " + type-of($to-val);
+	// first range
+	@if $from == true {
+		@debug "parsed type: single value (end): " + $to-val;
+		$resolved-range: (range-start: $to, range-end: false, value: $to-val);
+		//@include -add-range($to, false, $prop, $to-val);
+	}
+	@else {
+		//advanced list parsing
+		@if type-of($from-val) == "list" and type-of($to-val) == "list" and list.length($from-val) == list.length($to-val) {
+			@debug "parsed type: hard list range";
+			$result-list: ();
+			@for $i from 1 through list.length($from-val) {
+				$cur-val-from: list.nth($from-val, $i);
+				$cur-val-to: list.nth($to-val, $i);
+				@debug '** parsing from ' + $cur-val-from + ' to ' $cur-val-to;
+
+				@if type-of($cur-val-from) == type-of($cur-val-to) and type-of($cur-val-to) == "number"
+				 and
+				 	(unit($cur-val-from) == unit($cur-val-to)
+				 	or unit($cur-val-from) == ""
+				 	or unit($cur-val-to) == "")
+				 and $cur-val-from != $cur-val-to {
+					@if strip-units($cur-val-to) == 0 and strip-units($to) == 0 {
+						@debug "**** propcalc from "+ $cur-val-from + " to 0px";
+						$result-list: list.append($result-list, propcalc($from, $cur-val-from));
+					}
+					@else {
+						@debug '**** gencalc from ' + $cur-val-from + ' to ' + $cur-val-to;
+						$result-list: list.append($result-list, getcalc($from, $to, $cur-val-from, $cur-val-to));
+					}
+				}
+				@else {
+					@debug "**** output single value " + $cur-val-from;
+					$result-list: list.append($result-list, $cur-val-from);
+				}
+			}
+
+			$resolved-range: (range-start: $to, range-end: $from, value: $result-list);
+			//@include -add-range($to, $from, $prop, $result-list);
+		}
+		@else if  type-of($from-val) == "list" and $to-val == 0 {
+			@debug "parsed type: hard list range to zero";
+			$result-list: ();
+			@for $i from 1 through list.length($from-val) {
+				@debug "** propcalc " + list.nth($from-val, $i) + " goes with 0";
+				$cur-val-from: list.nth($from-val, $i);
+
+				@if type-of($cur-val-from) == "number"
+				 and strip-units($cur-val-from) != 0 {
+					@debug "**** propcalc from "+ $cur-val-from + " to 0px";
+					$result-list: list.append($result-list, propcalc($from, $cur-val-from));
+				}
+				@else {
+					@debug "**** output single value " + $cur-val-from;
+					$result-list: list.append($result-list, $cur-val-from);
+				}
+			}
+			$resolved-range: (range-start: $to, range-end: $from, value: $result-list);
+			//@include -add-range($to, $from, $prop, $result-list);
+		}
+		//simple range
+		@else if type-of($from-val) == "number" and type-of($to-val) == "number" and unit($from-val) != em and (unit($from-val) == unit($to-val) or unit($from-val) == "" or unit($to-val) == "") {
+			@debug "parsed type: gencalc from " + $from-val + " to " + $to-val;
+			@if $to-val*2 == $to-val {
+				$resolved-range: (range-start: $to, range-end: $from, value: propcalc($from, $from-val));
+				//@include -add-range($to, $from, $prop, propcalc($from, $from-val));
+			} @else {
+				$resolved-range: (range-start: $to, range-end: $from, value: getcalc($from, $to, $from-val, $to-val));
+				//@include -add-range($to, $from, $prop, getcalc($from, $to, $from-val, $to-val));
+			}
+		}
+		// numbers calc() range
+		@else {
+			@debug "parsed type: single value (start): " + $from-val;
+			$resolved-range: (range-start: $to, range-end: $from, value: $from-val);
+			//@include -add-range($to, $from, $prop, $from-val);
+		}
+	}
+	@return $resolved-range;
+}
+
+@function -media-core($breakstops) {
+	$range-list: [];
+
+	$zeroval: 0;
+	$prev-width: true;
+	$prev-val: false;
+
+	$is-pr: false;
+	@each $dev-type, $val in $breakstops {
+		@if $dev-type == 'zeroval' {	//not dev type (parameter init)
+			$zeroval: $val;
+		}
+		@else {
+			$width: decode-width($dev-type);
+
+			@if str-slice("" + $dev-type, -3) == "-pr" {
+				$is-pr: true;
+			}
+			@else {
+				$is-pr: false;
+			}
+
+			// ADD RANGE
+			@if($prev-width and $prev-width != true or ($prev-width==true and $is-pr)) {
+				$range-list: append($range-list, -resolve-range($prev-width, $width, $prev-val, $val));
+			}
+
+			// UPDATE INFO FOR NEXT RANGE
+			@if(not $is-pr) {
+				$prev-width: $width;
+				$prev-val: $val;
+			}
+			@else
+			{
+				$prev-width: false;
+				$prev-val: false;
+			}
+		}
+	}
+	@if($prev-width) {
+		$range-list: append($range-list, -resolve-range($prev-width, 0px, $prev-val, $zeroval));
+	}
+	@return $range-list;
+}
+
+@mixin media ($prop, $breakstops) {
+	$range-list: -media-core($breakstops);
+	@each $range in $range-list {
+		@include -add-range(map.get($range, "range-start"), map.get($range, "range-end"), $prop, map.get($range, "value"));
+	}
+}
+@mixin media-f ($prop, $inp-str, $breakstops...) {
+	@if length($breakstops) == 1 {
+		@debug "FORMATED PRINT: one element detected";
+		$sep-index: string.index($inp-str, $separator);
+
+		$range-list: -media-core(list.nth($breakstops, 1));
+		@each $range in $range-list {
+			@include -add-range(map.get($range, "range-start"), map.get($range, "range-end"), $prop, string.slice($inp-str, 1, $sep-index - 1) + map.get($range, "value") + string.slice($inp-str, $sep-index + string.length($separator), -1));
+		}
+
+	}
+	@else {
+		$comp: true;
+		$max-index: 1;
+		$max-length: 0;
+		@for $i from 1 through length($breakstops) {
+			$temp-length: length(list.nth($breakstops, $i));
+			@if $temp-length > $max-length {
+				$max-index: $i;
+				$max-length: $temp-length;
+			}
+		}
+		@debug "Base breakpoints index is " + $max-index;
+		@for $i from 1 through length(list.nth($breakstops, $max-index)) {
+			@if comp {
+				$comp-sub: true;
+				$first-key: list.nth(list.nth(list.nth($breakstops, $max-index), $i), 1);
+
+				@for $j from 1 through length($breakstops) {
+					@if $comp-sub and ($i > length(list.nth($breakstops, $j)) or list.nth(list.nth(list.nth($breakstops, $j), $i), 1) != $first-key) {
+						$comp: false;
+						$comp-sub: false;
+					}
+				}
+				@debug $i + " breakstop is" + if($comp-sub, " same", " different");
+			}
+		}
+
+		@debug "Overall conclusion: " + if($comp, "All breakstops are same", "Breakstops are different - needs advanced parsing");
+		@if $comp {
+			$range-lists: [];
+			@each $breakstop in $breakstops {
+				$range-lists: list.append($range-lists, -media-core($breakstop));
+			}
+			@for $i from 1 through length(list.nth($range-lists, 1)) {
+				$prev-index: 1;
+				$out-str: "";
+				@for $j from 1 through length($range-lists) {
+					$new-index: string.index(string.slice($inp-str, $prev-index), $separator) + $prev-index - 1;
+					@debug "sliced string: " + string.slice($inp-str, $prev-index);
+					@debug "new index: " + $new-index;
+					$out-str: $out-str + string.slice($inp-str, $prev-index, $new-index - 1) + map.get(list.nth(list.nth($range-lists, $j), $i), "value");
+					$prev-index: $new-index + string.length($separator);
+					@debug $out-str;
+				}
+				$out-str: $out-str + string.slice($inp-str, $prev-index, -1);
+				@include -add-range(map.get(list.nth(list.nth($range-lists, 1), $i), "range-start"), map.get(list.nth(list.nth($range-lists, 1), $i), "range-end"), $prop, $out-str);
+			}
+		}
+		@else {
+			@error "Breakstop keys are differnt - not released yet!";
+		}
+	}
+}

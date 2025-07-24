@@ -3,7 +3,7 @@ import { observer } from 'mobx-react-lite';
 const DiscoveredClients = observer(({ store }) => {
   return (
     <div>
-      <div className="container discovered-clients">
+      <div className="discovered-clients">
         {store.discoveredClients.map((addrs, index) => (
           <div key={index} className="discovered-client">
             {addrs.map((addr, addrIndex) => (

@@ -63,12 +63,12 @@ async fn run_server(shutdown: ShutdownSignal, shared_data: DiscoveryShared, spar
     // Use fixed port 8080 for development, or environment variable
     let port = 8080;
     
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
-    info!("Server running on http://127.0.0.1:{port}");
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
+    info!("Server running on http://0.0.0.0:{port}");
     
     // Only auto-open browser if not in development mode
     if std::env::var("SPARKLES_DEV").is_err() {
-        let _ = open::that(format!("http://127.0.0.1:{port}"));
+        let _ = open::that(format!("http://0.0.0.0:{port}"));
     }
 
 

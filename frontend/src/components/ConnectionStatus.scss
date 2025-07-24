@@ -1,0 +1,23 @@
+// Status color variables
+$status-connected: #369761;
+$status-disconnected: #d8646f;
+
+.connection-status {
+    position: fixed;
+    top: 0;
+    right: 0;
+    padding: 8px 12px;
+    font-size: 0.85em;
+    font-weight: 500;
+    color: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    z-index: 1000;
+
+    &.connected {
+        background-color: $status-connected;
+    }
+
+    &.disconnected {
+        background-color: $status-disconnected;
+    }
+}
