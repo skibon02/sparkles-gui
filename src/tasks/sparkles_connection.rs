@@ -1,4 +1,5 @@
 pub mod storage;
+pub mod event_skipper;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -7,12 +8,14 @@ use std::thread;
 use std::time::Instant;
 use log::{error, info};
 use smallvec::SmallVec;
+use sparkles::flush_thread_local;
 use sparkles_parser::packet_decoder::PacketDecoder;
 use sparkles_parser::parsed::ParsedEvent;
 use sparkles_parser::{SparklesParser, TracingEventId};
 use tokio::select;
 use crate::shared::{SparklesConnection, WsToSparklesMessage};
 use crate::tasks::sparkles_connection::storage::ClientStorage;
+use crate::tasks::sparkles_connection::event_skipper::EventSkippingProcessor;
 
 pub fn spawn_conn_handler(addr: SocketAddr, conn: SparklesConnection) {
     let (msg_tx, msg_rx) = tokio::sync::mpsc::channel(100);
@@ -21,7 +24,7 @@ pub fn spawn_conn_handler(addr: SocketAddr, conn: SparklesConnection) {
     spawn_connection(addr, msg_tx);
 
     let _ = tokio::spawn(async move {
-        if let Err(e) = run(addr, conn, client_storage).await {;
+        if let Err(e) = run(addr, conn, client_storage).await {
             error!("Error running Sparkles connection: {e}");
         }
         else {
@@ -41,7 +44,6 @@ struct ActiveRangeRequest {
 async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: ClientStorage) -> anyhow::Result<()> {
     let mut active_sending_requests: HashMap<u32, ActiveRangeRequest> = HashMap::new();
     let (mut dummy_tx, _dummy_rx) = tokio::sync::mpsc::channel(1);
-    let mut is_disconnected = false;
 
     loop {
         select! {
@@ -183,7 +185,6 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     info!("Sparkles channel closed, preserving events");
                     let (tx, rx) = tokio::sync::mpsc::channel(1);
 
-                    is_disconnected = true;
                     conn.mark_connection_disconnected(conn.id());
                     storage.msg_rx = rx;
                     dummy_tx = tx;
@@ -198,80 +199,122 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 end,
             } = active_sending_requests.remove(&k).unwrap();
             for (thread_ord_id, thread_storage) in storage.thread_events.iter() {
+                let g = sparkles_macro::range_event_start!("request thread events");
                 let mut res_buf = Vec::new();
 
                 let mut buf = Vec::new();
 
+                let gc = sparkles_macro::range_event_start!("count events");
                 let instant_event_cnt = thread_storage.request_instant_events(start, end).count();
-
-                let mut prev_event: Option<(u64, TracingEventId)> = None;
+                let range_event_cnt = thread_storage.request_range_events(start, end).count();
+                drop(gc);
+                
                 let skip_thr = (end - start) / 2000; // assume 2000px horizontal resolution, use as skip threshold
-                let mut keep_cnt = 1;
-                let mut skip_cnt = 1;
-                if instant_event_cnt > MAX_EV_CNT {
-                    skip_cnt = (instant_event_cnt + MAX_EV_CNT - 1) / MAX_EV_CNT; // ceil division
-                } else if instant_event_cnt > 0 {
-                    keep_cnt = MAX_EV_CNT / instant_event_cnt;
-                }
+                let mut processor = EventSkippingProcessor::new(skip_thr, MAX_EV_CNT, instant_event_cnt, range_event_cnt);
 
-                let mut counter = 0;
-                let cycle_len = keep_cnt + skip_cnt;
-                let mut skipped = 0;
+                let mut active_ranges: Vec<(u64, u8)> = Vec::new(); // (end_time, y_position)
+                let mut used_y_levels = [false; 256]; // Track which Y levels are in use
+                let mut range_buf = Vec::new();
+
+                // Process range events first to find max Y position
+                let g2 = sparkles_macro::range_event_start!("process range events");
+                let mut max_range_y = 0u8;
+                let mut prev_range_start: Option<u64> = None;
+                
+                for (range_start, range_end, start_id, end_id) in thread_storage.request_range_events(start, end) {
+                    let duration = range_end - range_start;
+                    let start_distance = if let Some(prev_start) = prev_range_start {
+                        range_start - prev_start
+                    } else {
+                        skip_thr + 1 // Always keep first event
+                    };
+
+                    if processor.should_keep_range(start_distance, duration) {
+                        // Remove expired ranges and update used_y_levels
+                        let mut i = 0;
+                        while i < active_ranges.len() {
+                            if active_ranges[i].0 <= range_start {
+                                let (_, expired_y) = active_ranges.swap_remove(i);
+                                used_y_levels[expired_y as usize] = false;
+                            } else {
+                                i += 1;
+                            }
+                        }
+
+                        // Find first available Y position using array lookup
+                        let mut y_pos = 0u8;
+                        while y_pos < 255 && used_y_levels[y_pos as usize] {
+                            y_pos += 1;
+                        }
+
+                        // Track maximum Y position used by ranges
+                        max_range_y = max_range_y.max(y_pos);
+
+                        // Mark Y position as used and add to active ranges
+                        used_y_levels[y_pos as usize] = true;
+                        active_ranges.push((range_end, y_pos));
+
+                        // Serialize range event
+                        range_buf.extend_from_slice(&range_start.to_le_bytes());
+                        range_buf.extend_from_slice(&range_end.to_le_bytes());
+                        range_buf.push(start_id);
+                        if let Some(end_id) = end_id {
+                            range_buf.push(end_id);
+                        } else {
+                            range_buf.push(255);
+                        }
+                        range_buf.push(y_pos);
+                    }
+                    prev_range_start = Some(range_start);
+                }
+                drop(g2);
+
+                // Process instant events - put them all at max_range_y + 1
+                let g3 = sparkles_macro::range_event_start!("process instant events");
+                let instant_y = if max_range_y < 255 { max_range_y + 1 } else { 255 };
+                let mut prev_instant: Option<(u64, TracingEventId)> = None;
+                
                 for (tm, id) in thread_storage.request_instant_events(start, end) {
-                    if let Some((prev_tm, prev_id)) = prev_event {
+                    if let Some((prev_tm, prev_id)) = prev_instant {
                         let tm_diff = tm - prev_tm;
 
-                        let should_keep = if tm_diff < skip_thr {
-                            let keep = counter < keep_cnt;
-                            counter = (counter + 1) % cycle_len;
-                            keep
-                        } else {
-                            counter = 0;
-                            true
-                        };
-
-                        if should_keep {
+                        if processor.should_keep_instant(tm_diff) {
                             buf.extend_from_slice(&prev_tm.to_le_bytes());
                             buf.push(prev_id);
-                        }
-                        else {
-                            skipped += 1;
+                            buf.push(instant_y);
                         }
                     }
-                    prev_event = Some((tm, id));
+                    prev_instant = Some((tm, id));
                 }
-                if let Some((tm, id)) = prev_event {
+                
+                // Handle last instant event
+                if let Some((tm, id)) = prev_instant {
                     buf.extend_from_slice(&tm.to_le_bytes());
                     buf.push(id);
+                    buf.push(instant_y);
                 }
+                drop(g3);
+                
                 let len = buf.len() as u32;
                 res_buf.extend_from_slice(&len.to_le_bytes());
                 res_buf.extend_from_slice(&buf);
-
-                let mut buf = Vec::new();
-                // for (start, end, start_id, end_id) in thread_storage.request_range_events(start, end) {
-                //     buf.extend_from_slice(&start.to_le_bytes());
-                //     buf.extend_from_slice(&end.to_le_bytes());
-                //     buf.push(start_id);
-                //     if let Some(end_id) = end_id {
-                //         buf.push(end_id);
-                //     } else {
-                //         buf.push(255);
-                //     }
-                // }
-                res_buf.extend_from_slice(&buf);
                 
+                res_buf.extend_from_slice(&range_buf);
+                
+                let (skipped_instant, skipped_range, total_instant, total_range) = processor.get_stats();
                 let stats = EventsSkipStats {
-                    skipped_instant: skipped,
-                    skipped_range: 0,
-                    total_instant: instant_event_cnt,
-                    total_range: 0,
+                    skipped_instant,
+                    skipped_range,
+                    total_instant,
+                    total_range,
                 };
 
-                info!("Connection manager: sending range request response to {} for thread {}: start={}, end={}, data size={}. Skipped: {skipped}/{instant_event_cnt}",
-                        addr, thread_ord_id, start, end, buf.len());
+                drop(g);
+                info!("Connection manager: sending range request response to {} for thread {}: start={}, end={}, instant data size={}, range data size={}. Skipped: instant {}/{}, range {}/{}",
+                        addr, thread_ord_id, start, end, buf.len(), range_buf.len(), skipped_instant, total_instant, skipped_range, total_range);
                 resp.send((*thread_ord_id, res_buf, stats)).await?;
             }
+            flush_thread_local();
         }
     }
 }

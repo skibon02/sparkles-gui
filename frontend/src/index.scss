@@ -150,14 +150,14 @@ body {
 
 .discovered-client {
     margin-top: 2em;
+    padding-left: .6em;
+    padding-bottom: .3em;
+    border-bottom: 2px solid $main;
+    
     @include media.media(max-width, (
         f: 22em,
         rmob: 16em,
     ));
-
-    padding-left: .6em;
-    padding-bottom: .3em;
-    border-bottom: 2px solid $main;
 }
 .discovered-client > div {
     display: flex;

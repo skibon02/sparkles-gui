@@ -1262,6 +1262,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "sparkles"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92d74bdbcf1b5f10bc9ca233a1caf25486a0192f98147d5574b7e1117ecf9a71"
+dependencies = [
+ "bincode",
+ "chrono",
+ "log",
+ "multicast-discovery-socket",
+ "parking_lot",
+ "ringbuf",
+ "sparkles-core 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sparkles-macro 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thread-id",
+]
+
+[[package]]
+name = "sparkles-core"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2905eb200a711146ba8c0a6c3ae8913d88535ad116d0077dfbded77f2fe44f96"
+dependencies = [
+ "bincode",
+ "enumset",
+ "sha2-const-stable",
+ "sparkles-macro 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "sparkles-core"
 version = "0.1.8"
 source = "git+https://github.com/skibon02/sparkles.git?branch=main#cf3ab58e312412fd725b3e1abbbc33ee17802a8b"
@@ -1269,7 +1298,7 @@ dependencies = [
  "bincode",
  "enumset",
  "sha2-const-stable",
- "sparkles-macro",
+ "sparkles-macro 0.1.6 (git+https://github.com/skibon02/sparkles.git?branch=main)",
 ]
 
 [[package]]
@@ -1288,11 +1317,24 @@ dependencies = [
  "simple_logger",
  "slab",
  "smallvec",
+ "sparkles",
+ "sparkles-macro 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "sparkles-parser",
  "strum",
  "tokio",
  "tower",
  "tower-http",
+]
+
+[[package]]
+name = "sparkles-macro"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0036289c52bab33e653d7409a9496904777980c8fd2e8cdc4f3706e21732bc0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1319,7 +1361,7 @@ dependencies = [
  "prost-build",
  "rand",
  "ringbuf",
- "sparkles-core",
+ "sparkles-core 0.1.8 (git+https://github.com/skibon02/sparkles.git?branch=main)",
  "thiserror",
 ]
 
@@ -1393,6 +1435,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "thread-id"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99043e46c5a15af379c06add30d9c93a6c0e8849de00d244c4a2c417da128d80"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

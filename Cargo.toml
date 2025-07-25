@@ -22,3 +22,8 @@ parking_lot = "0.12.4"
 sparkles-parser = { version = "0.1.1", git="https://github.com/skibon02/sparkles.git", branch = "main" }
 slab = "0.4.10"
 smallvec = "1.15.1"
+sparkles = "0.1.8"
+sparkles-macro = "0.1.6"
+
+[profile.release]
+lto=true

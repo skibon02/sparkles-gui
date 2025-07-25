@@ -3,7 +3,7 @@ import trace from "../trace.js";
 import ConnectionThreadStore from './ConnectionThread.js';
 
 function generateColorForThread(seed) {
-  // Simple hash function for string to number
+  // Better hash function for more even distribution
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
     const char = seed.charCodeAt(i);
@@ -11,13 +11,45 @@ function generateColorForThread(seed) {
     hash = hash & hash; // Convert to 32-bit integer
   }
   
-  // Use hash to generate RGB values
-  // Ensure we get decent contrast and avoid too dark colors
-  const r = Math.abs(hash) % 156 + 50;
-  const g = Math.abs(hash >> 8) % 156 + 50;
-  const b = Math.abs(hash >> 16) % 156 + 50;
+  // Additional hash mixing for better distribution
+  hash = hash ^ (hash >>> 16);
+  hash = hash * 0x85ebca6b;
+  hash = hash ^ (hash >>> 13);
+  hash = hash * 0xc2b2ae35;
+  hash = hash ^ (hash >>> 16);
   
-  return [r, g, b];
+  // Use HSL color space for better visual distribution
+  // Fixed saturation and lightness, vary hue for maximum distinction
+  const hue = Math.abs(hash) % 360;
+  const saturation = 70; // 70% saturation for vibrant colors
+  const lightness = 55;  // 55% lightness for good contrast
+  
+  // Convert HSL to RGB
+  const c = (1 - Math.abs(2 * lightness / 100 - 1)) * saturation / 100;
+  const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+  const m = lightness / 100 - c / 2;
+  
+  let r, g, b;
+  if (hue < 60) {
+    r = c; g = x; b = 0;
+  } else if (hue < 120) {
+    r = x; g = c; b = 0;
+  } else if (hue < 180) {
+    r = 0; g = c; b = x;
+  } else if (hue < 240) {
+    r = 0; g = x; b = c;
+  } else if (hue < 300) {
+    r = x; g = 0; b = c;
+  } else {
+    r = c; g = 0; b = x;
+  }
+  
+  // Convert to 0-255 range
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255)
+  ];
 }
 
 class ActiveConnection {
@@ -388,11 +420,14 @@ class ActiveConnection {
       offset += 8;
       const eventId = view.getUint8(offset);
       offset += 1;
+      const yPos = view.getUint8(offset);
+      offset += 1;
 
       instantEvents.push({
         timestamp: tm,
         event_id: eventId,
-        color_seed: `instant-${thread_ord_id}-${eventId}`
+        y_position: yPos,
+        color_seed: `instant-${eventId}`
       });
     }
 
@@ -406,13 +441,16 @@ class ActiveConnection {
       offset += 1;
       const end_id = view.getUint8(offset);
       offset += 1;
+      const yPos = view.getUint8(offset);
+      offset += 1;
 
       rangeEvents.push({
         start_timestamp: start,
         end_timestamp: end,
         start_event_id: start_id,
         end_event_id: end_id,
-        color_seed: `range-${thread_ord_id}-${start_id}`
+        y_position: yPos,
+        color_seed: `range-${start_id}`
       });
     }
 
@@ -428,44 +466,89 @@ class ActiveConnection {
 
   updateCanvasData(thread_ord_id, instantEvents, rangeEvents) {
     // Update buffers for this specific thread
-    this.updateThreadBuffers(thread_ord_id, instantEvents);
+    this.updateThreadBuffers(thread_ord_id, instantEvents, rangeEvents);
   }
-  updateThreadBuffers(thread_ord_id, instantEvents) {
+  updateThreadBuffers(thread_ord_id, instantEvents, rangeEvents) {
     if (!this.timestamps) return;
     let s = trace.start();
 
-    const eventCount = instantEvents.length;
+    const instantEventCount = instantEvents.length;
+    const rangeEventCount = rangeEvents.length;
 
-    if (eventCount === 0) {
+    if (instantEventCount === 0 && rangeEventCount === 0) {
       // Keep thread but mark as having 0 events (don't delete to avoid race conditions)
       const thread = this.threadStore.getOrCreateThread(thread_ord_id);
-      thread.count = 0;
+      thread.instantCount = 0;
+      thread.rangeCount = 0;
+      thread.maxYPosition = 0;
       trace.end(s, "updateThreadBuffers")
       return;
     }
 
-    // Calculate positions (0.0 to 1.0) and generate colors
-    const positions = new Float32Array(eventCount);
-    const colors = new Float32Array(eventCount * 3); // RGB per instance
+    // Calculate maximum y position from both event types for canvas height
+    let maxYPosition = 0;
+    for (const event of instantEvents) {
+      maxYPosition = Math.max(maxYPosition, event.y_position);
+    }
+    for (const event of rangeEvents) {
+      maxYPosition = Math.max(maxYPosition, event.y_position);
+    }
+
+    // Calculate positions (0.0 to 1.0) and generate colors for instant events
+    const instantPositions = new Float32Array(instantEventCount);
+    const instantColors = new Float32Array(instantEventCount * 3); // RGB per instance
+    const instantYPositions = new Float32Array(instantEventCount); // Y positions
 
     for (let i = 0; i < instantEvents.length; i++) {
       const event = instantEvents[i];
       
       // Normalize timestamp to 0.0-1.0 range based on current view
       const viewRange = this.currentView.end - this.currentView.start;
-      positions[i] = viewRange > 0 ? (event.timestamp - this.currentView.start) / viewRange : 0.0;
+      instantPositions[i] = viewRange > 0 ? (event.timestamp - this.currentView.start) / viewRange : 0.0;
+      
+      // Store y position 
+      instantYPositions[i] = event.y_position;
       
       // Generate color using the existing logic
       const rgb = generateColorForThread(event.color_seed);
 
       // Convert to 0.0-1.0 range for WebGL
-      colors[i * 3] = rgb[0] / 255.0;     // R
-      colors[i * 3 + 1] = rgb[1] / 255.0; // G  
-      colors[i * 3 + 2] = rgb[2] / 255.0; // B
+      instantColors[i * 3] = rgb[0] / 255.0;     // R
+      instantColors[i * 3 + 1] = rgb[1] / 255.0; // G  
+      instantColors[i * 3 + 2] = rgb[2] / 255.0; // B
+    }
+
+    // Calculate positions and dimensions for range events (rectangles)
+    const rangePositions = new Float32Array(rangeEventCount * 2); // start and width for each rectangle
+    const rangeColors = new Float32Array(rangeEventCount * 3); // RGB per rectangle
+    const rangeYPositions = new Float32Array(rangeEventCount); // Y positions
+
+    for (let i = 0; i < rangeEvents.length; i++) {
+      const event = rangeEvents[i];
+      
+      // Normalize timestamps to 0.0-1.0 range based on current view
+      const viewRange = this.currentView.end - this.currentView.start;
+      const startPos = viewRange > 0 ? (event.start_timestamp - this.currentView.start) / viewRange : 0.0;
+      const endPos = viewRange > 0 ? (event.end_timestamp - this.currentView.start) / viewRange : 0.0;
+      const width = Math.max(endPos - startPos, 0.001); // Minimum width for visibility
+      
+      rangePositions[i * 2] = startPos;     // start position
+      rangePositions[i * 2 + 1] = width;    // width
+      
+      // Store y position
+      rangeYPositions[i] = event.y_position;
+      
+      // Generate color using the existing logic
+      const rgb = generateColorForThread(event.color_seed);
+
+      // Convert to 0.0-1.0 range for WebGL
+      rangeColors[i * 3] = rgb[0] / 255.0;     // R
+      rangeColors[i * 3 + 1] = rgb[1] / 255.0; // G  
+      rangeColors[i * 3 + 2] = rgb[2] / 255.0; // B
     }
 
     // Update buffers for this thread
-    this.threadStore.updateThreadBuffers(thread_ord_id, positions, colors, eventCount);
+    this.threadStore.updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantEventCount, rangePositions, rangeColors, rangeEventCount, instantYPositions, rangeYPositions, maxYPosition);
     trace.end(s, "updateThreadBuffers")
   }
   // Getter for thread skip stats

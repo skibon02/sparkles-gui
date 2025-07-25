@@ -20,16 +20,26 @@ class ConnectionThread {
   // Resize handling
   resizeObserver = null;
   
-  // WebGL buffers
-  positionBuffer = null;
-  colorBuffer = null;
-  count = 0;
+  // WebGL buffers for instant events (triangles)
+  instantPositionBuffer = null;
+  instantColorBuffer = null;
+  instantYPositionBuffer = null;
+  instantCount = 0;
+  
+  // WebGL buffers for range events (rectangles)
+  rangePositionBuffer = null;
+  rangeColorBuffer = null;
+  rangeYPositionBuffer = null;
+  rangeCount = 0;
   
   // Skip statistics
   skipStats = null;
   
   // Track count for dynamic canvas height
   tracksCnt = 1;
+  
+  // Maximum Y position for height calculation
+  maxYPosition = 0;
   
   // Pending buffer data for when WebGL becomes ready
   pendingBufferData = null;
@@ -51,9 +61,11 @@ class ConnectionThread {
     return this.skipStats;
   }
   
-  // Get computed canvas height based on tracksCnt
+  // Get computed canvas height based on maximum Y position
   getCanvasHeight() {
-    return 20 + this.tracksCnt * 40;
+    const baseHeight = 30; // Base height for top offset
+    const rowHeight = 25; // Height per Y level
+    return baseHeight + (this.maxYPosition + 1) * rowHeight;
   }
   
   // Set tracks count
@@ -129,35 +141,62 @@ class ConnectionThread {
   initShaders() {
     if (!this.gl) return;
 
-    // Vertex shader for instanced triangle rendering
+    // Vertex shader for both triangles and rectangles
     const vertexShaderSource = `
-      attribute vec2 a_vertex; // Triangle vertex position
-      attribute float a_instancePosition; // 0.0 to 1.0 position along timeline
+      attribute vec2 a_vertex; // Shape vertex position
+      attribute float a_instancePosition; // 0.0 to 1.0 position along timeline (triangle) or start pos (rectangle)
       attribute vec3 a_instanceColor; // RGB color for this instance
+      attribute float a_instanceWidth; // Width for rectangles (unused for triangles)
+      attribute float a_instanceYPos; // Y position (0-255)
       
       uniform vec2 u_canvasSize;
       uniform vec2 u_triangleSize;
+      uniform float u_pixelRatio;
+      uniform float u_rectHeight; // Height for rectangles in CSS pixels
+      uniform bool u_isRectMode; // true for rectangles, false for triangles
+      uniform float u_rowHeight; // Height per Y level in CSS pixels
       
       varying vec3 v_color;
 
       void main() {
-        // Scale vertex by triangle size
-        vec2 vertex = a_vertex * u_triangleSize;
+        // Calculate vertical offset based on Y position
+        float yOffset = 15.0 * u_pixelRatio + a_instanceYPos * u_rowHeight * u_pixelRatio;
         
-        // Position along timeline (a_instancePosition is 0.0 to 1.0)
-        float xPos = a_instancePosition * u_canvasSize.x;
-        
-        // Position 10px from top of canvas (triangle tip points up)
-        float yPos = 10.0 + u_triangleSize.y * 0.5;
-        
-        // Final position
-        vec2 finalPos = vec2(xPos, yPos) + vertex;
-        
-        // Convert to clip space
-        vec2 clipSpace = (finalPos / u_canvasSize) * 2.0 - 1.0;
-        clipSpace.y = -clipSpace.y; // Flip Y for screen coordinates
-        
-        gl_Position = vec4(clipSpace, 0.0, 1.0);
+        if (u_isRectMode) {
+          // Rectangle rendering
+          vec2 vertex = a_vertex; // vertex is already in 0-1 range for rectangle
+          
+          // Calculate rectangle dimensions
+          float rectWidthPx = a_instanceWidth * u_canvasSize.x;
+          float rectHeightPx = u_rectHeight * u_pixelRatio;
+          
+          // Position along timeline
+          float xPos = a_instancePosition * u_canvasSize.x + vertex.x * rectWidthPx;
+          float yPos = yOffset + vertex.y * rectHeightPx;
+          
+          vec2 finalPos = vec2(xPos, yPos);
+          
+          // Convert to clip space
+          vec2 clipSpace = (finalPos / u_canvasSize) * 2.0 - 1.0;
+          clipSpace.y = -clipSpace.y; // Flip Y for screen coordinates
+          
+          gl_Position = vec4(clipSpace, 0.0, 1.0);
+        } else {
+          // Triangle rendering
+          vec2 vertex = a_vertex * u_triangleSize * u_pixelRatio;
+          
+          // Position along timeline
+          float xPos = a_instancePosition * u_canvasSize.x;
+          float yPos = yOffset + (u_triangleSize.y * u_pixelRatio) * 0.5;
+          
+          vec2 finalPos = vec2(xPos, yPos) + vertex;
+          
+          // Convert to clip space
+          vec2 clipSpace = (finalPos / u_canvasSize) * 2.0 - 1.0;
+          clipSpace.y = -clipSpace.y; // Flip Y for screen coordinates
+          
+          gl_Position = vec4(clipSpace, 0.0, 1.0);
+        }
         
         // Pass through the color
         v_color = a_instanceColor;
@@ -199,8 +238,18 @@ class ConnectionThread {
     
     // Apply any pending buffer data
     if (this.pendingBufferData) {
-      console.log(`Thread ${this.thread_ord_id}: Applying pending buffer data with ${this.pendingBufferData.eventCount} events`);
-      this.updateBuffers(this.pendingBufferData.positions, this.pendingBufferData.colors, this.pendingBufferData.eventCount);
+      console.log(`Thread ${this.thread_ord_id}: Applying pending buffer data`);
+      this.updateBuffers(
+        this.pendingBufferData.instantPositions, 
+        this.pendingBufferData.instantColors, 
+        this.pendingBufferData.instantCount, 
+        this.pendingBufferData.rangePositions, 
+        this.pendingBufferData.rangeColors, 
+        this.pendingBufferData.rangeCount,
+        this.pendingBufferData.instantYPositions,
+        this.pendingBufferData.rangeYPositions,
+        this.pendingBufferData.maxYPosition
+      );
     }
     
     // Start continuous rendering
@@ -225,12 +274,12 @@ class ConnectionThread {
   initBuffers() {
     if (!this.gl) return;
     
-    // Create triangle vertex buffer with actual vertices
+    // Create triangle vertex buffer
     this.triangleVertexBuffer = this.gl.createBuffer();
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.triangleVertexBuffer);
     
     // Triangle vertices for upward-pointing triangle with cut tail
-    const vertices = new Float32Array([
+    const triangleVertices = new Float32Array([
       0.0, -0.5,   // Top point (tip pointing up)
       -0.5, 0.5,   // Bottom left
       -0.2, 0.5,   // Cut left
@@ -244,42 +293,95 @@ class ConnectionThread {
       0.5, 0.5     // Bottom right
     ]);
     
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, triangleVertices, this.gl.STATIC_DRAW);
 
-    // Create per-thread instance buffers
-    this.positionBuffer = this.gl.createBuffer();
-    this.colorBuffer = this.gl.createBuffer();
+    // Create rectangle vertex buffer
+    this.rectangleVertexBuffer = this.gl.createBuffer();
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rectangleVertexBuffer);
+    
+    // Rectangle vertices (0-1 normalized coordinates)
+    const rectangleVertices = new Float32Array([
+      0.0, 0.0,   // Bottom left
+      1.0, 0.0,   // Bottom right  
+      0.0, 1.0,   // Top left
+      
+      1.0, 0.0,   // Bottom right
+      1.0, 1.0,   // Top right
+      0.0, 1.0    // Top left
+    ]);
+    
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, rectangleVertices, this.gl.STATIC_DRAW);
+
+    // Create per-thread instance buffers for instant events
+    this.instantPositionBuffer = this.gl.createBuffer();
+    this.instantColorBuffer = this.gl.createBuffer();
+    this.instantYPositionBuffer = this.gl.createBuffer();
+    
+    // Create per-thread instance buffers for range events
+    this.rangePositionBuffer = this.gl.createBuffer();
+    this.rangeColorBuffer = this.gl.createBuffer();
+    this.rangeYPositionBuffer = this.gl.createBuffer();
   }
 
   initUniforms() {
     if (!this.gl || !this.shaderProgram) return;
 
-    // Set triangle size uniform
-    const triangleSizeLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_triangleSize');
-    this.gl.uniform2f(triangleSizeLocation, 16.0, 20.0); // 16px wide, 20px tall
-    
-    // Update canvas size
+    // Update canvas size first to get proper dimensions
     this.updateCanvasSize();
+    
+    // Set pixel ratio uniform
+    const pixelRatio = window.devicePixelRatio || 1;
+    const pixelRatioLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_pixelRatio');
+    this.gl.uniform1f(pixelRatioLocation, pixelRatio);
+    
+    // Set triangle size uniform - keep in CSS pixels, shader will handle scaling
+    const triangleSizeLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_triangleSize');
+    this.gl.uniform2f(triangleSizeLocation, 12.0, 15.0); // 15px tall triangles
+    
+    // Set rectangle height uniform
+    const rectHeightLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_rectHeight');
+    this.gl.uniform1f(rectHeightLocation, 12.0); // 12px tall rectangles
+    
+    // Set row height uniform
+    const rowHeightLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_rowHeight');
+    this.gl.uniform1f(rowHeightLocation, 25.0); // 25px per Y level
   }
 
   // Update WebGL buffers
-  updateBuffers(positions, colors, eventCount) {
-    if (!this.gl || !this.positionBuffer || !this.colorBuffer) {
+  updateBuffers(instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition) {
+    if (!this.gl || !this.instantPositionBuffer || !this.instantColorBuffer || !this.rangePositionBuffer || !this.rangeColorBuffer) {
       // Store data for when WebGL becomes ready
-      this.pendingBufferData = { positions, colors, eventCount };
+      this.pendingBufferData = { 
+        instantPositions, instantColors, instantCount, instantYPositions,
+        rangePositions, rangeColors, rangeCount, rangeYPositions, maxYPosition 
+      };
       return;
     }
 
+    // Update instant event buffers (triangles)
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instantPositionBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, instantPositions, this.gl.DYNAMIC_DRAW);
 
-    // Update position buffer
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.DYNAMIC_DRAW);
-
-    // Update color buffer  
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.colorBuffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, colors, this.gl.DYNAMIC_DRAW);
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instantColorBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, instantColors, this.gl.DYNAMIC_DRAW);
     
-    this.count = eventCount;
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instantYPositionBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, instantYPositions, this.gl.DYNAMIC_DRAW);
+    
+    // Update range event buffers (rectangles)
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangePositionBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, rangePositions, this.gl.DYNAMIC_DRAW);
+
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeColorBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, rangeColors, this.gl.DYNAMIC_DRAW);
+    
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeYPositionBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, rangeYPositions, this.gl.DYNAMIC_DRAW);
+    
+    this.instantCount = instantCount;
+    this.rangeCount = rangeCount;
+    this.maxYPosition = maxYPosition;
+    
     // Clear any pending data since we've successfully updated
     this.pendingBufferData = null;
   }
@@ -305,20 +407,25 @@ class ConnectionThread {
     const rect = this.canvasRef.getBoundingClientRect();
     const displayWidth = rect.width;
     const displayHeight = rect.height;
+    
+    // Account for device pixel ratio for crisp rendering on high-DPI displays
+    const pixelRatio = window.devicePixelRatio || 1;
+    const bufferWidth = Math.floor(displayWidth * pixelRatio);
+    const bufferHeight = Math.floor(displayHeight * pixelRatio);
 
-    // Set canvas buffer size to match display size
-    if (this.canvasRef.width !== displayWidth || this.canvasRef.height !== displayHeight) {
-      this.canvasRef.width = displayWidth;
-      this.canvasRef.height = displayHeight;
+    // Set canvas buffer size to match display size * pixel ratio
+    if (this.canvasRef.width !== bufferWidth || this.canvasRef.height !== bufferHeight) {
+      this.canvasRef.width = bufferWidth;
+      this.canvasRef.height = bufferHeight;
 
-      // Update WebGL viewport
-      this.gl.viewport(0, 0, displayWidth, displayHeight);
+      // Update WebGL viewport to match buffer size
+      this.gl.viewport(0, 0, bufferWidth, bufferHeight);
 
-      // Update canvas size uniform
+      // Update canvas size uniform with buffer dimensions
       if (this.shaderProgram) {
         this.gl.useProgram(this.shaderProgram);
         const canvasSizeLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_canvasSize');
-        this.gl.uniform2f(canvasSizeLocation, displayWidth, displayHeight);
+        this.gl.uniform2f(canvasSizeLocation, bufferWidth, bufferHeight);
       }
 
     }
@@ -359,8 +466,7 @@ class ConnectionThread {
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
     
     // Only render if we have events
-    if (this.count === 0) {
-      // Uncomment for debugging: console.log(`Thread ${this.thread_ord_id}: Skipping render - no events (count: ${this.count})`);
+    if (this.instantCount === 0 && this.rangeCount === 0) {
       return;
     }
 
@@ -374,44 +480,102 @@ class ConnectionThread {
     const vertexLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_vertex');
     const positionLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instancePosition');
     const colorLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instanceColor');
+    const widthLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instanceWidth');
+    const yPosLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instanceYPos');
+    const rectModeLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_isRectMode');
 
-    // Set up vertex attribute (triangle shape)
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.triangleVertexBuffer);
-    this.gl.enableVertexAttribArray(vertexLocation);
-    this.gl.vertexAttribPointer(vertexLocation, 2, this.gl.FLOAT, false, 0, 0);
+    // Render triangles (instant events)
+    if (this.instantCount > 0) {
+      this.gl.uniform1i(rectModeLocation, 0); // Triangle mode
+      
+      // Set up triangle vertex attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.triangleVertexBuffer);
+      this.gl.enableVertexAttribArray(vertexLocation);
+      this.gl.vertexAttribPointer(vertexLocation, 2, this.gl.FLOAT, false, 0, 0);
+      
+      // Set up instance position attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instantPositionBuffer);
+      this.gl.enableVertexAttribArray(positionLocation);
+      this.gl.vertexAttribPointer(positionLocation, 1, this.gl.FLOAT, false, 0, 0);
+      
+      // Set up instance color attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instantColorBuffer);
+      this.gl.enableVertexAttribArray(colorLocation);
+      this.gl.vertexAttribPointer(colorLocation, 3, this.gl.FLOAT, false, 0, 0);
+      
+      // Set up instance Y position attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instantYPositionBuffer);
+      this.gl.enableVertexAttribArray(yPosLocation);
+      this.gl.vertexAttribPointer(yPosLocation, 1, this.gl.FLOAT, false, 0, 0);
+      
+      // Disable width attribute for triangles
+      this.gl.disableVertexAttribArray(widthLocation);
+      this.gl.vertexAttrib1f(widthLocation, 0.0);
 
-    // Configure instancing for vertex attribute
-    if (this.gl.vertexAttribDivisor) {
-      this.gl.vertexAttribDivisor(vertexLocation, 0); // Per vertex
+      // Configure instancing
+      if (this.gl.vertexAttribDivisor) {
+        this.gl.vertexAttribDivisor(vertexLocation, 0); // Per vertex
+        this.gl.vertexAttribDivisor(positionLocation, 1); // Per instance
+        this.gl.vertexAttribDivisor(colorLocation, 1); // Per instance
+        this.gl.vertexAttribDivisor(yPosLocation, 1); // Per instance
+        this.gl.vertexAttribDivisor(widthLocation, 0); // Not used for triangles
+      }
+
+      // Draw triangles
+      if (this.gl.drawArraysInstanced) {
+        this.gl.drawArraysInstanced(this.gl.TRIANGLES, 0, 9, this.instantCount);
+      }
     }
 
-    // Set up instance position attribute
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-    this.gl.enableVertexAttribArray(positionLocation);
-    this.gl.vertexAttribPointer(positionLocation, 1, this.gl.FLOAT, false, 0, 0);
-    
-    // Set up instance color attribute
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.colorBuffer);
-    this.gl.enableVertexAttribArray(colorLocation);
-    this.gl.vertexAttribPointer(colorLocation, 3, this.gl.FLOAT, false, 0, 0);
+    // Render rectangles (range events)
+    if (this.rangeCount > 0) {
+      this.gl.uniform1i(rectModeLocation, 1); // Rectangle mode
+      
+      // Set up rectangle vertex attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rectangleVertexBuffer);
+      this.gl.enableVertexAttribArray(vertexLocation);
+      this.gl.vertexAttribPointer(vertexLocation, 2, this.gl.FLOAT, false, 0, 0);
+      
+      // Set up instance position attribute (start position)
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangePositionBuffer);
+      this.gl.enableVertexAttribArray(positionLocation);
+      this.gl.vertexAttribPointer(positionLocation, 1, this.gl.FLOAT, false, 8, 0); // First float
+      
+      // Set up instance width attribute
+      this.gl.enableVertexAttribArray(widthLocation);
+      this.gl.vertexAttribPointer(widthLocation, 1, this.gl.FLOAT, false, 8, 4); // Second float
+      
+      // Set up instance color attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeColorBuffer);
+      this.gl.enableVertexAttribArray(colorLocation);
+      this.gl.vertexAttribPointer(colorLocation, 3, this.gl.FLOAT, false, 0, 0);
+      
+      // Set up instance Y position attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeYPositionBuffer);
+      this.gl.enableVertexAttribArray(yPosLocation);
+      this.gl.vertexAttribPointer(yPosLocation, 1, this.gl.FLOAT, false, 0, 0);
 
-    // Configure instancing for instance attributes
-    if (this.gl.vertexAttribDivisor) {
-      this.gl.vertexAttribDivisor(positionLocation, 1); // Advance per instance
-      this.gl.vertexAttribDivisor(colorLocation, 1); // Advance per instance
-    }
+      // Configure instancing
+      if (this.gl.vertexAttribDivisor) {
+        this.gl.vertexAttribDivisor(vertexLocation, 0); // Per vertex
+        this.gl.vertexAttribDivisor(positionLocation, 1); // Per instance
+        this.gl.vertexAttribDivisor(widthLocation, 1); // Per instance
+        this.gl.vertexAttribDivisor(colorLocation, 1); // Per instance
+        this.gl.vertexAttribDivisor(yPosLocation, 1); // Per instance
+      }
 
-    // Draw instances
-    if (this.gl.drawArraysInstanced) {
-      this.gl.drawArraysInstanced(this.gl.TRIANGLES, 0, 9, this.count);
-    } else {
-      console.warn('Instanced rendering not supported');
+      // Draw rectangles
+      if (this.gl.drawArraysInstanced) {
+        this.gl.drawArraysInstanced(this.gl.TRIANGLES, 0, 6, this.rangeCount);
+      }
     }
 
     // Clean up
     this.gl.disableVertexAttribArray(vertexLocation);
     this.gl.disableVertexAttribArray(positionLocation);
     this.gl.disableVertexAttribArray(colorLocation);
+    this.gl.disableVertexAttribArray(widthLocation);
+    this.gl.disableVertexAttribArray(yPosLocation);
   }
 
   // Cleanup WebGL resources
@@ -421,17 +585,29 @@ class ConnectionThread {
     
     // Clean up WebGL resources
     if (this.gl) {
-      if (this.positionBuffer) this.gl.deleteBuffer(this.positionBuffer);
-      if (this.colorBuffer) this.gl.deleteBuffer(this.colorBuffer);
+      if (this.instantPositionBuffer) this.gl.deleteBuffer(this.instantPositionBuffer);
+      if (this.instantColorBuffer) this.gl.deleteBuffer(this.instantColorBuffer);
+      if (this.instantYPositionBuffer) this.gl.deleteBuffer(this.instantYPositionBuffer);
+      if (this.rangePositionBuffer) this.gl.deleteBuffer(this.rangePositionBuffer);
+      if (this.rangeColorBuffer) this.gl.deleteBuffer(this.rangeColorBuffer);
+      if (this.rangeYPositionBuffer) this.gl.deleteBuffer(this.rangeYPositionBuffer);
       if (this.triangleVertexBuffer) this.gl.deleteBuffer(this.triangleVertexBuffer);
+      if (this.rectangleVertexBuffer) this.gl.deleteBuffer(this.rectangleVertexBuffer);
       if (this.shaderProgram) this.gl.deleteProgram(this.shaderProgram);
     }
     
-    this.positionBuffer = null;
-    this.colorBuffer = null;
+    this.instantPositionBuffer = null;
+    this.instantColorBuffer = null;
+    this.instantYPositionBuffer = null;
+    this.rangePositionBuffer = null;
+    this.rangeColorBuffer = null;
+    this.rangeYPositionBuffer = null;
     this.triangleVertexBuffer = null;
+    this.rectangleVertexBuffer = null;
     this.shaderProgram = null;
-    this.count = 0;
+    this.instantCount = 0;
+    this.rangeCount = 0;
+    this.maxYPosition = 0;
     this.gl = null;
     this.canvasRef = null;
   }
@@ -491,9 +667,9 @@ class ConnectionThreadStore {
   }
 
   // Update thread buffers
-  updateThreadBuffers(thread_ord_id, positions, colors, eventCount) {
+  updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition) {
     const thread = this.getOrCreateThread(thread_ord_id);
-    thread.updateBuffers(positions, colors, eventCount);
+    thread.updateBuffers(instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition);
   }
   
   // Thread name management
