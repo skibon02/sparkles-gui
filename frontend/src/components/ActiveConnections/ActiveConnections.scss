@@ -1,36 +1,30 @@
 @use '../../index.scss' as *;
 
+$marker-bg: #1d376e;
+$marker-shadow: #10182b;
+$marker-text: #95d1cd;
+
 .connection-canvas {
     width: 100%;
     height: var(--canvas-height, 60px);
     display: block;
-    margin-top: 10px;
+    margin-top: .2em;
 }
 
 .reset-btn {
-    margin-left: 8px;
-    @include text-shadow();
+    @include button-variant($btn-standard);
 
-    &:hover {
-        background-color: $btn-hover;
-    }
+    margin-left: .3em;
 }
 
 .scroll-btn-container {
     display: inline-flex;
-    margin-left: 8px;
+    margin-left: .3em;
 }
 
 .scroll-btn {
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
     position: relative;
     z-index: 1;
-
-    &:active {
-        @include button-active-state;
-        z-index: 1;
-    }
 
     &.scroll-on {
         @include button-variant($btn-scroll-on);
@@ -42,22 +36,10 @@
 }
 
 .lock-btn {
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    border-left: none;
-    margin-left: 0;
-    padding: 0 8px;
-    min-width: 32px;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    padding: 0 .3em !important;
+    min-width: 1.5em;
     position: relative;
     z-index: 2;
-
-    &:active {
-        @include button-active-state;
-    }
 
     &.lock-locked {
         @include button-variant($btn-lock-locked);
@@ -69,7 +51,8 @@
 }
 
 .lock-icon {
-    width: 24px;
+    padding-top: .2em;
+    width: .8em;
     image-rendering: pixelated;
     image-rendering: -moz-crisp-edges;
     image-rendering: crisp-edges;
@@ -77,16 +60,15 @@
 
 .connection-cont,
 .threads-cont {
-    margin-top: 50px;
-    padding-bottom: 5px;
-    overflow: hidden;
+    margin-top: 2em;
+    padding-bottom: .2em;
     position: relative;
 }
 
 .connection-cont {
     &.connection-offline {
         .connection-header {
-            border-bottom-color: #666;
+            border-bottom-color: #3d4a51;
         }
 
         .addr {
@@ -100,23 +82,22 @@
     position: relative;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding-bottom: 8px;
+    padding-bottom: .3em;
     border-bottom: 2px solid $main;
-    padding-left: 15px;
+    padding-left: .6em;
 }
 
 .connection-body {
     position: relative;
-    padding-top: 8px;
-    margin-left: 50px;
+    padding-top: .3em;
+    margin-left: 2em;
     border-left: 2px solid $main;
 }
 
 .connection-stats {
     display: flex;
-    padding-left: 20px;
-    gap: 20px;
+    padding-left: .8em;
+    gap: .8em;
     font-size: 0.9em;
     flex-wrap: wrap;
     color: $text-secondary;
@@ -126,7 +107,7 @@
     position: absolute;
     left: 0;
     top: 0;
-    transform: translateY(-.72em) translateX(-.585em);
+    transform: translateY(-.72em) translateX(-.594em);
     color: $main;
     transition: 0.2s transform;
     cursor: pointer;
@@ -144,8 +125,7 @@
 }
 
 .badge {
-    padding: 5px 8px;
-    border-radius: 3px;
+    padding: .1em .4em;
     font-size: 0.9em;
     display: inline-block;
 
@@ -160,8 +140,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    margin-left: -15px;
-    padding-left: 15px;
+    margin-left: -1em;
+    padding-left: 1em;
 
     &.collapsed {
         /* max-height set via inline styles */
@@ -179,7 +159,7 @@
 }
 
 .thread-item {
-    margin-bottom: 10px;
+    margin-bottom: .4em;
 
     &:last-child {
         margin-bottom: 0;
@@ -189,29 +169,27 @@
 .zoom-indicator {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin: 10px 0;
-    padding: 4px 0;
+    gap: .4em;
+    margin: .1em 0;
+    padding: .05em 0;
     font-size: 0.85em;
     color: var(--text-accent);
     position: relative;
     left: 40%;
-    width: fit-content;
 }
 
 .zoom-scale-bar {
     height: 2px;
     background-color: $accent;
     border-radius: 1px;
-    min-width: 20px;
     position: relative;
 
     &::before,
     &::after {
         content: '';
         position: absolute;
-        width: 1px;
-        height: 8px;
+        width: 2px;
+        height: .4em;
         background-color: $accent;
         top: -3px;
     }
@@ -227,7 +205,7 @@
 
 .zoom-scale-label {
     white-space: nowrap;
-    color: $accent;
+    color: $main;
 }
 
 .start-end-lines {
@@ -250,22 +228,21 @@
 
 .start-line,
 .end-line {
-    background-color: $accent;
-    box-shadow: 0 0 3px $accent;
+    background-color: $marker-bg;
 
     .line-label {
         position: absolute;
-        top: -20px;
+        top: -.8em;
         left: 50%;
         transform: translateX(-50%);
         font-size: 10px;
         font-weight: bold;
         padding: 2px 4px;
-        border-radius: 2px;
+        box-shadow: .15em .15em $marker-shadow;
         white-space: nowrap;
         font-family: monospace;
-        background-color: $accent;
-        color: white;
+        background-color: $marker-bg;
+        color: $marker-text;
     }
 }
 
@@ -273,7 +250,6 @@
     cursor: pointer;
     padding: 2px 4px;
     border-radius: 3px;
-    transition: background-color 0.2s;
 
     &:hover {
         background-color: rgba(255, 255, 255, 0.1);
@@ -289,7 +265,6 @@
     font-size: inherit;
     font-family: inherit;
     outline: none;
-    min-width: 100px;
 
     &:focus {
         border-color: $accent;

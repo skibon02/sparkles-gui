@@ -24,9 +24,7 @@ class WebSocketStore {
 
   connect = () => {
     try {
-      const wsUrl = import.meta.env.DEV 
-        ? `ws://localhost:3000/ws`
-        : `ws://${window.location.host}/ws`;
+      const wsUrl = `ws://${window.location.host}/ws`;
       
       this.socket = new WebSocket(wsUrl);
       

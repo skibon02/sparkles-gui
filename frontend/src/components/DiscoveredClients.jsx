@@ -10,7 +10,7 @@ const DiscoveredClients = observer(({ store }) => {
               <div key={addrIndex}>
                 <div className="addr">{addr}</div>
                 <button 
-                  className="btn connect-btn" 
+                  className="connect-btn"
                   onClick={() => store.connectToClient(addr)}
                 >
                   Connect

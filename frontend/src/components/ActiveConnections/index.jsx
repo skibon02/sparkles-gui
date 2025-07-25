@@ -92,14 +92,14 @@ const ActiveConnections = observer(({ store }) => {
                   return (
                     <div className="scroll-btn-container">
                       <button
-                        className={`btn scroll-btn ${connectionObj.isScrollingEnabled ? 'scroll-on' : 'scroll-off'}`}
+                        className={`scroll-btn ${connectionObj.isScrollingEnabled ? 'scroll-on' : 'scroll-off'}`}
                         onClick={() => connectionObj.toggleScrolling()}
                       >
                         Scrolling: {connectionObj.isScrollingEnabled ? 'ON' : 'OFF'}
                       </button>
                       {connectionObj.isScrollingEnabled && (
                         <button
-                          className={`btn lock-btn ${connectionObj.isLocked ? 'lock-unlocked' : 'lock-locked'}`}
+                          className={`lock-btn ${connectionObj.isLocked ? 'lock-unlocked' : 'lock-locked'}`}
                           onClick={() => connectionObj.toggleLock()}
                         >
                           <img src={lockIcon} alt="lock" className="lock-icon" />
@@ -109,7 +109,7 @@ const ActiveConnections = observer(({ store }) => {
                   );
                 })()}
                 <button
-                  className="btn reset-btn"
+                  className="reset-btn"
                   onClick={() => store.resetConnectionView(connection.id)}
                 >
                   Reset View

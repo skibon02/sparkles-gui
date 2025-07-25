@@ -1,4 +1,5 @@
 @use 'sass:map';
+@use './components/media.scss' as media;
 
 /* Import Inter font */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
@@ -18,157 +19,165 @@ $bg-primary: #222132;
 $main: #86cfea;
 $accent: #ce9cff;
 $text-secondary: #d1e8ef;
-$btn-primary: #725faf;
-$btn-hover: #8a73c7;
-$btn-dark: #4a3d6b;
-$btn-active: #5a4890;
 $border-primary: #4a6b7c;
 $badge-bg: #2c5770;
 $badge-secondary: #4d7071;
 
-// Button color schemes
 $btn-scroll-on: (
-  bg: #ff8c00,
-  hover: #e07b00,
-  shadow: #994d00
+    bg: #ff8c00,
+    hover: #e07b00,
+    shadow: #994d00
+);
+
+$btn-standard: (
+    bg: #725faf,
+    hover: #8a73c7,
+    shadow:#4a3d6b,
+
 );
 
 $btn-scroll-off: (
-  bg: #4a90e2,
-  hover: #357abd,
-  shadow: #1a3366
+    bg: #4a90e2,
+    hover: #357abd,
+    shadow: #1a3366
 );
 
 $btn-lock-locked: (
-  bg: #dc3545,
-  hover: #c82333,
-  shadow: #a01c29
+    bg: #dc3545,
+    hover: #c82333,
+    shadow: #a01c29
 );
 
 $btn-lock-unlocked: (
-  bg: #28a745,
-  hover: #218838,
-  shadow: #1a5c2b
+    bg: #28a745,
+    hover: #218838,
+    shadow: #1a5c2b
 );
 
 // Mixins
 @mixin text-shadow($opacity: 0.3) {
-  text-shadow: 2px 2px 0 rgba(0, 0, 0, $opacity);
+    text-shadow: .05em .05em 0 rgba(0, 0, 0, $opacity);
 }
 
 @mixin button-shadow($color) {
-  box-shadow: $color 4px 4px 0 0px;
+    box-shadow: $color .15em .15em 0;
 }
 
 @mixin button-active-state {
-  transform: translate(4px, 4px);
-  box-shadow: none;
+    transform: translate(.15em, .15em);
+    box-shadow: none;
 }
 
 @mixin button-variant($colors) {
-  background-color: map.get($colors, bg);
-  border-color: map.get($colors, bg);
-  color: white;
-  @include button-shadow(map.get($colors, shadow));
-  @include text-shadow();
+    background-color: map.get($colors, bg);
 
-  &:hover {
-    background-color: map.get($colors, hover);
-    border-color: map.get($colors, hover);
-  }
+    display: inline-block;
+    margin: .15em 0;
+    padding: .3em .7em;
+    border: none;
+    cursor: pointer;
 
-  &:active {
-    @include button-active-state;
-  }
+    text-decoration: none;
+    user-select: none;
+    font-family: inherit;
+    font-weight: 400;
+    font-size: inherit;
+    color: white;
+
+    @include button-shadow(map.get($colors, shadow));
+    @include text-shadow();
+
+    &:hover {
+        background-color: map.get($colors, hover);
+        border-color: map.get($colors, hover);
+    }
+
+    &:active {
+        @include button-active-state;
+    }
 }
 
 :root {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.5;
+    font-weight: 400;
+
+    @include media.media(font-size, (
+            f: 22px,
+            mob: 20px,
+            mimob: 18px,
+    ));
 }
 
 * {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
 }
 
 body {
-  background-color: $bg-primary;
-  color: $main;
-  margin: 0;
+    background-color: $bg-primary;
+    color: $main;
+    margin: 0;
 }
 
 #root {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 0;
-  margin-left: 1em;
-  border-left: 2px solid $main;
-  font-family: 'Terminal Grotesque', monospace;
-  font-size: 33px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 1em 0;
+    margin-left: .8em;
 
-  > h1 {
-    font-family: 'Poxast', sans-serif;
-    font-weight: 400;
-    font-size: 40px;
-  }
+    border-left: 2px solid $main;
+    font-family: 'Terminal Grotesque', monospace;
+
+    > h1 {
+        padding-left: .5em;
+        font-family: 'Poxast', sans-serif;
+        font-weight: 400;
+
+        @include media.media(font-size, (
+            f: 2.2em,
+            rmob: 1.5em,
+        ));
+    }
 }
 
-h1 {
-  padding-left: 20px;
-  font-size: 2.5em;
-  margin-bottom: 20px;
-  color: $main;
-}
-
-.btn {
-  background-color: $btn-primary;
-  color: white;
-  padding: 10px 20px;
-  border: none;
-  cursor: pointer;
-  display: inline-block;
-  text-decoration: none;
-  user-select: none;
-  font-family: inherit;
-  font-weight: 400;
-  font-size: inherit;
-  margin-top: 10px;
-  @include button-shadow($btn-dark);
-
-  &:hover {
-    background-color: $btn-hover;
-  }
-
-  &:active {
-    background-color: $btn-active;
-    @include button-active-state;
-  }
+.connect-btn {
+    @include button-variant($btn-standard);
 }
 
 
 .discovered-client {
-  margin: 50px 0;
-  max-width: 483px;
-  padding-left: 15px;
-  padding-bottom: 8px;
-  border-bottom: 2px solid $main;
+    margin-top: 2em;
+    @include media.media(max-width, (
+        f: 22em,
+        rmob: 16em,
+    ));
+
+    padding-left: .6em;
+    padding-bottom: .3em;
+    border-bottom: 2px solid $main;
+}
+.discovered-client > div {
+    display: flex;
+    margin-bottom: .1em;
 }
 
 .addr {
-  color: $accent;
-  font-weight: 400;
-  display: inline-block;
-  min-width: 320px;
+    display: inline-block;
+    margin-right: auto;
+    padding-top: .2em;
+
+
+    color: $accent;
+    font-weight: 400;
 }
 
 .discovered-clients {
-  /* Discovered clients container */
+    /* Discovered clients container */
 }
 
 .active-clients {
-  /* Active clients container */
+    /* Active clients container */
 }
