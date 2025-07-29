@@ -129,6 +129,13 @@ class WebSocketStore {
                   connection.setThreadName(parseInt(threadId), threadName);
                 }
               }
+              
+              // Apply event names from server
+              if (connectionInfo.event_names) {
+                for (const [threadId, eventNamesObj] of Object.entries(connectionInfo.event_names)) {
+                  connection.setThreadEventNames(parseInt(threadId), eventNamesObj);
+                }
+              }
             }
           }
         } else if (msg.Addressed !== undefined) {

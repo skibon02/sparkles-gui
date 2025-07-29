@@ -1,0 +1,33 @@
+// Use the same SCSS variables as the main app
+$bg-primary: #222132;
+$main: #86cfea;
+$accent: #ce9cff;
+$text-secondary: #d1e8ef;
+$border-primary: #4a6b7c;
+
+.global-tooltip {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  
+  .tooltip-content {
+    background-color: $bg-primary;
+    color: $main;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid $border-primary;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    
+    font-family: 'Terminal Grotesque', monospace;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.2;
+    
+    white-space: nowrap;
+    text-shadow: 0.05em 0.05em 0 rgba(0, 0, 0, 0.3);
+    
+    // Subtle gradient border effect
+    background: linear-gradient($bg-primary, $bg-primary) padding-box,
+                linear-gradient(135deg, $border-primary, $accent) border-box;
+  }
+}

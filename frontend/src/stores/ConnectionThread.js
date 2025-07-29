@@ -43,6 +43,15 @@ class ConnectionThread {
   
   // Pending buffer data for when WebGL becomes ready
   pendingBufferData = null;
+  
+  // Event names mapping (TracingEventId -> String)
+  eventNames = new Map();
+  
+  // Color to event ID mapping for cursor feedback
+  colorToEventMap = new Map(); // "r,g,b" -> eventId
+  
+  // Pixel reading buffer for cursor feedback
+  pixelBuffer = new Uint8Array(4);
 
   constructor(thread_ord_id, connectionId) {
     this.thread_ord_id = thread_ord_id;
@@ -85,6 +94,131 @@ class ConnectionThread {
   
   getThreadName() {
     return this.thread_name;
+  }
+  
+  // Event names methods
+  setEventNames(eventNamesObj) {
+    this.eventNames.clear();
+    if (eventNamesObj) {
+      for (const [eventId, eventName] of Object.entries(eventNamesObj)) {
+        this.eventNames.set(parseInt(eventId), eventName);
+      }
+    }
+  }
+  
+  getEventName(eventId) {
+    return this.eventNames.get(eventId) || `Event ${eventId}`;
+  }
+  
+  // Add color to event ID mapping
+  addColorMapping(eventId, r, g, b, endEventId = 255) {
+    // Store integer color values (0-255) directly
+    const colorKey = `${r},${g},${b}`;
+    // Store either single event ID or object with start/end IDs
+    // 255 is the special value indicating no end event
+    if (endEventId !== 255 && endEventId !== eventId) {
+      this.colorToEventMap.set(colorKey, { startId: eventId, endId: endEventId });
+    } else {
+      this.colorToEventMap.set(colorKey, eventId);
+    }
+  }
+  
+  // Look up event ID by color with tolerance for antialiasing
+  getEventIdByColor(r, g, b) {
+    const rInt = Math.round(r * 255);
+    const gInt = Math.round(g * 255);
+    const bInt = Math.round(b * 255);
+    const colorKey = `${rInt},${gInt},${bInt}`;
+    
+    // First try exact match
+    let eventId = this.colorToEventMap.get(colorKey);
+    
+    if (eventId !== undefined) {
+      console.log(`✅ Exact color match: rgb(${rInt}, ${gInt}, ${bInt}) -> eventId ${eventId} (${this.getEventName(eventId)})`);
+      return eventId;
+    }
+    
+    // If no exact match, try tolerance matching (for antialiasing)
+    const tolerance = 2; // Allow up to 2 units difference per channel
+    let bestMatch = null;
+    let bestDistance = Infinity;
+    
+    for (const [colorStr, id] of this.colorToEventMap.entries()) {
+      const [storedR, storedG, storedB] = colorStr.split(',').map(Number);
+      
+      // Calculate color distance (Manhattan distance)
+      const distance = Math.abs(rInt - storedR) + Math.abs(gInt - storedG) + Math.abs(bInt - storedB);
+      
+      if (distance <= tolerance && distance < bestDistance) {
+        bestMatch = id;
+        bestDistance = distance;
+      }
+    }
+    
+    if (bestMatch !== null) {
+      console.log(`🎯 Tolerance match: rgb(${rInt}, ${gInt}, ${bInt}) -> eventId ${bestMatch} (${this.getEventName(bestMatch)}) distance: ${bestDistance}`);
+      return bestMatch;
+    }
+    
+    console.log(`❌ No color match for: rgb(${rInt}, ${gInt}, ${bInt}) (tolerance: ${tolerance})`);
+    return undefined;
+  }
+  
+  // Get event name by color
+  getEventNameByColor(r, g, b) {
+    const eventData = this.getEventIdByColor(r, g, b);
+    if (eventData === undefined) return null;
+    
+    // Handle range events with different start/end IDs
+    if (typeof eventData === 'object' && eventData.startId !== undefined) {
+      const startName = this.getEventName(eventData.startId);
+      const endName = this.getEventName(eventData.endId);
+      return `${startName} → ${endName}`;
+    }
+    
+    // Handle single event ID
+    return this.getEventName(eventData);
+  }
+  
+  // Read pixel color at canvas coordinates
+  readPixelColor(canvasX, canvasY) {
+    if (!this.gl || !this.canvasRef || !this.isRendering) {
+      return { r: 0, g: 0, b: 0, a: 0 };
+    }
+    
+    // Force a render to ensure we have current frame data
+    this.render();
+    
+    // Account for device pixel ratio
+    const pixelRatio = window.devicePixelRatio || 1;
+    const x = Math.floor(canvasX * pixelRatio);
+    const y = Math.floor((this.canvasRef.height - canvasY * pixelRatio)); // Flip Y coordinate
+    
+    // Clamp coordinates to canvas bounds
+    const clampedX = Math.max(0, Math.min(x, this.canvasRef.width - 1));
+    const clampedY = Math.max(0, Math.min(y, this.canvasRef.height - 1));
+    
+    try {
+      // Ensure we're reading from the default framebuffer
+      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+      
+      // Read single pixel
+      this.gl.readPixels(clampedX, clampedY, 1, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.pixelBuffer);
+      
+      // Convert to 0-1 range
+      const color = {
+        r: this.pixelBuffer[0] / 255,
+        g: this.pixelBuffer[1] / 255,
+        b: this.pixelBuffer[2] / 255,
+        a: this.pixelBuffer[3] / 255
+      };
+      
+      console.log(`🔍 Read pixel: rgb(${this.pixelBuffer[0]}, ${this.pixelBuffer[1]}, ${this.pixelBuffer[2]}) at canvas(${canvasX}, ${canvasY})`);
+      
+      return color;
+    } catch (error) {
+      return { r: 0, g: 0, b: 0, a: 0 };
+    }
   }
   
   // Rendering control based on expanded state
@@ -209,7 +343,7 @@ class ConnectionThread {
       varying vec3 v_color;
 
       void main() {
-        gl_FragColor = vec4(v_color, 0.9);
+        gl_FragColor = vec4(v_color, 1.0);
       }
     `;
 
@@ -681,6 +815,29 @@ class ConnectionThreadStore {
   getThreadName(thread_ord_id) {
     const thread = this.getThread(thread_ord_id);
     return thread ? thread.getThreadName() : '';
+  }
+  
+  // Event names management
+  setThreadEventNames(thread_ord_id, eventNamesObj) {
+    const thread = this.getOrCreateThread(thread_ord_id);
+    thread.setEventNames(eventNamesObj);
+  }
+  
+  getEventName(thread_ord_id, eventId) {
+    const thread = this.getThread(thread_ord_id);
+    return thread ? thread.getEventName(eventId) : `Event ${eventId}`;
+  }
+  
+  // Read pixel color from specific thread canvas
+  readPixelColor(thread_ord_id, canvasX, canvasY) {
+    const thread = this.getThread(thread_ord_id);
+    return thread ? thread.readPixelColor(canvasX, canvasY) : { r: 0, g: 0, b: 0, a: 0 };
+  }
+  
+  // Get event name by color from specific thread
+  getEventNameByColor(thread_ord_id, r, g, b) {
+    const thread = this.getThread(thread_ord_id);
+    return thread ? thread.getEventNameByColor(r, g, b) : null;
   }
   
   // Expanded state management for all threads

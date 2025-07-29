@@ -21,7 +21,7 @@ function generateColorForThread(seed) {
   // Use HSL color space for better visual distribution
   // Fixed saturation and lightness, vary hue for maximum distinction
   const hue = Math.abs(hash) % 360;
-  const saturation = 70; // 70% saturation for vibrant colors
+  const saturation = 55; // 55% saturation for less vibrant colors
   const lightness = 55;  // 55% lightness for good contrast
   
   // Convert HSL to RGB
@@ -450,7 +450,7 @@ class ActiveConnection {
         start_event_id: start_id,
         end_event_id: end_id,
         y_position: yPos,
-        color_seed: `range-${start_id}`
+        color_seed: `range-${start_id}-${end_id}`
       });
     }
 
@@ -513,9 +513,16 @@ class ActiveConnection {
       const rgb = generateColorForThread(event.color_seed);
 
       // Convert to 0.0-1.0 range for WebGL
-      instantColors[i * 3] = rgb[0] / 255.0;     // R
-      instantColors[i * 3 + 1] = rgb[1] / 255.0; // G  
-      instantColors[i * 3 + 2] = rgb[2] / 255.0; // B
+      const r = rgb[0] / 255.0;
+      const g = rgb[1] / 255.0;
+      const b = rgb[2] / 255.0;
+      instantColors[i * 3] = r;     // R
+      instantColors[i * 3 + 1] = g; // G  
+      instantColors[i * 3 + 2] = b; // B
+      
+      // Store color mapping for cursor feedback using original integer values
+      const thread = this.threadStore.getOrCreateThread(thread_ord_id);
+      thread.addColorMapping(event.event_id, rgb[0], rgb[1], rgb[2]);
     }
 
     // Calculate positions and dimensions for range events (rectangles)
@@ -542,13 +549,21 @@ class ActiveConnection {
       const rgb = generateColorForThread(event.color_seed);
 
       // Convert to 0.0-1.0 range for WebGL
-      rangeColors[i * 3] = rgb[0] / 255.0;     // R
-      rangeColors[i * 3 + 1] = rgb[1] / 255.0; // G  
-      rangeColors[i * 3 + 2] = rgb[2] / 255.0; // B
+      const r = rgb[0] / 255.0;
+      const g = rgb[1] / 255.0;
+      const b = rgb[2] / 255.0;
+      rangeColors[i * 3] = r;     // R
+      rangeColors[i * 3 + 1] = g; // G  
+      rangeColors[i * 3 + 2] = b; // B
+      
+      // Store color mapping for cursor feedback using original integer values (use start and end event IDs)
+      const thread = this.threadStore.getOrCreateThread(thread_ord_id);
+      thread.addColorMapping(event.start_event_id, rgb[0], rgb[1], rgb[2], event.end_event_id);
     }
 
     // Update buffers for this thread
     this.threadStore.updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantEventCount, rangePositions, rangeColors, rangeEventCount, instantYPositions, rangeYPositions, maxYPosition);
+
     trace.end(s, "updateThreadBuffers")
   }
   // Getter for thread skip stats
@@ -586,6 +601,15 @@ class ActiveConnection {
   
   getThreadName(thread_ord_id) {
     return this.threadStore.getThreadName(thread_ord_id);
+  }
+  
+  // Event names management
+  setThreadEventNames(thread_ord_id, eventNamesObj) {
+    this.threadStore.setThreadEventNames(thread_ord_id, eventNamesObj);
+  }
+  
+  getEventName(thread_ord_id, eventId) {
+    return this.threadStore.getEventName(thread_ord_id, eventId);
   }
   
   // Control rendering based on expanded state

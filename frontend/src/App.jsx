@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import WebSocketStore from './stores/WebSocketStore';
+import GlobalTooltip from './components/GlobalTooltip';
 import {
   DiscoveredClients,
   ActiveConnections,
@@ -26,6 +27,7 @@ const App = observer(() => {
       <DiscoveredClients store={store} />
       <ActiveConnections store={store} />
 
+      <GlobalTooltip />
     </>
   );
 });

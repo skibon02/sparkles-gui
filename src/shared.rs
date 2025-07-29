@@ -175,9 +175,9 @@ impl WsConnection {
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn get_event_names(&mut self, id: u32, thread: u64) -> anyhow::Result<HashMap<TracingEventId, Arc<str>>> {
+    pub async fn get_event_names(&mut self, id: u32, thread_id: u64) -> anyhow::Result<HashMap<TracingEventId, Arc<str>>> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let msg = WsToSparklesMessage::GetEventNames { thread, resp: sender };
+        let msg = WsToSparklesMessage::GetEventNames { thread_id, resp: sender };
         self.send_message(id, msg)?;
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
@@ -287,7 +287,7 @@ pub enum WsToSparklesMessage {
         resp: tokio::sync::oneshot::Sender<()>,
     },
     GetEventNames {
-        thread: u64,
+        thread_id: u64,
         resp: tokio::sync::oneshot::Sender<HashMap<TracingEventId, Arc<str>>>,
     },
     RequestNewRange {

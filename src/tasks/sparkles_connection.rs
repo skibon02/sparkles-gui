@@ -63,10 +63,10 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                         info!("Connection manager: added new range request for start: {start}, end: {end}");
                     }
                     WsToSparklesMessage::GetEventNames {
-                        thread,
+                        thread_id,
                         resp
                     } => {
-                        if let Some(event_storage) = storage.thread_events.get(&thread) {
+                        if let Some(event_storage) = storage.thread_events.get(&thread_id) {
                             let event_names = event_storage.event_names.clone();
                             let _ = resp.send(event_names);
                         }

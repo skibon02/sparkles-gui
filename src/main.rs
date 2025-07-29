@@ -18,7 +18,7 @@ async fn main() {
     let g = sparkles::init(
         SparklesConfig::default()
             .with_udp_multicast_default()
-            .with_flush_threshold(8000)
+            .with_flush_threshold(1)
     );
 
     let shutdown = ShutdownSignal::register_ctrl_c();

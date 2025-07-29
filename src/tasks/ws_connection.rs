@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use log::{error, info, warn};
+use sparkles_parser::TracingEventId;
 use tokio::time::interval;
 use crate::shared::WsConnection;
 use crate::tasks::sparkles_connection::EventsSkipStats;
@@ -117,21 +118,26 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                 let mut conns = Vec::new();
 
                 for (id, addr, online) in clients {
-                    let stats = if online {
-                        conn.get_storage_stats(id).await.unwrap_or_default()
-                    } else {
-                        StorageStats::default()
-                    };
-                    let thread_names = if online {
-                        conn.get_thread_names(id).await.unwrap_or_default()
-                    } else {
-                        HashMap::new()
-                    };
+                    let stats = conn.get_storage_stats(id).await.unwrap_or_default();
+                    let thread_names = conn.get_thread_names(id).await.unwrap_or_default();
+                    
+                    let mut event_names = HashMap::new();
+                    for (&thread_id, _) in &thread_names {
+                        if let Ok(names) = conn.get_event_names(id, thread_id).await {
+                            let string_names: HashMap<TracingEventId, String> = names
+                                .into_iter()
+                                .map(|(k, v)| (k, v.to_string()))
+                                .collect();
+                            event_names.insert(thread_id, string_names);
+                        }
+                    }
+                    
                     conns.push(ActiveConnectionInfo {
                         id,
                         addr,
                         stats,
                         thread_names,
+                        event_names,
                         online,
                     })
                 }
@@ -216,6 +222,7 @@ pub struct ActiveConnectionInfo {
     addr: SocketAddr,
     stats: StorageStats,
     thread_names: HashMap<u64, String>,
+    event_names: HashMap<u64, HashMap<TracingEventId, String>>,
     online: bool,
 }
 #[derive(Debug, Clone, serde::Serialize)]
