@@ -107,13 +107,13 @@ $marker-text: #95d1cd;
     position: absolute;
     left: 0;
     top: 0;
-    transform: translateY(-.72em) translateX(-.594em);
+    transform: translateY(-.76em) translateX(-.452em);
     color: $main;
     transition: 0.2s transform;
     cursor: pointer;
 
     &.expanded {
-        transform: translateY(-.75em) translateX(-.63em) rotate(45deg);
+        transform: translateY(-.76em) translateX(-.47em) rotate(45deg);
     }
 }
 

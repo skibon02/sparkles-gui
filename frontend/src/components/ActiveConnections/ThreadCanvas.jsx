@@ -33,10 +33,8 @@ const ThreadCanvas = observer(({ store, connectionId, thread }) => {
     // Read pixel color from WebGL and lookup event name
     const connection = store.getConnection(connectionId);
     if (connection) {
-      console.log(`🖱️ Mouse move on thread ${thread.thread_ord_id} at (${canvasX}, ${canvasY})`);
       const pixelColor = connection.threadStore.readPixelColor(thread.thread_ord_id, canvasX, canvasY);
       const eventName = connection.threadStore.getEventNameByColor(thread.thread_ord_id, pixelColor.r, pixelColor.g, pixelColor.b);
-      console.log(`📋 Setting tooltip: eventName="${eventName}"`);
       cursorStore.setPixelColor(pixelColor.r, pixelColor.g, pixelColor.b, pixelColor.a, eventName);
     }
   };

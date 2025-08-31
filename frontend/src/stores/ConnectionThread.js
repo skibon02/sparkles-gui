@@ -1,4 +1,4 @@
-import { makeAutoObservable, action } from 'mobx';
+import {action, makeAutoObservable} from 'mobx';
 
 class ConnectionThread {
   thread_ord_id = null;
@@ -30,6 +30,7 @@ class ConnectionThread {
   rangePositionBuffer = null;
   rangeColorBuffer = null;
   rangeYPositionBuffer = null;
+  rangeCrossThreadBuffer = null;
   rangeCount = 0;
   
   // Skip statistics
@@ -111,13 +112,17 @@ class ConnectionThread {
   }
   
   // Add color to event ID mapping
-  addColorMapping(eventId, r, g, b, endEventId = 255) {
+  addColorMapping(eventId, r, g, b, endEventId = 255, startEventName = null) {
     // Store integer color values (0-255) directly
     const colorKey = `${r},${g},${b}`;
     // Store either single event ID or object with start/end IDs
     // 255 is the special value indicating no end event
     if (endEventId !== 255 && endEventId !== eventId) {
-      this.colorToEventMap.set(colorKey, { startId: eventId, endId: endEventId });
+      this.colorToEventMap.set(colorKey, { 
+        startId: eventId, 
+        endId: endEventId, 
+        startEventName: startEventName // For cross-thread events, use provided name
+      });
     } else {
       this.colorToEventMap.set(colorKey, eventId);
     }
@@ -134,7 +139,6 @@ class ConnectionThread {
     let eventId = this.colorToEventMap.get(colorKey);
     
     if (eventId !== undefined) {
-      console.log(`✅ Exact color match: rgb(${rInt}, ${gInt}, ${bInt}) -> eventId ${eventId} (${this.getEventName(eventId)})`);
       return eventId;
     }
     
@@ -156,11 +160,9 @@ class ConnectionThread {
     }
     
     if (bestMatch !== null) {
-      console.log(`🎯 Tolerance match: rgb(${rInt}, ${gInt}, ${bInt}) -> eventId ${bestMatch} (${this.getEventName(bestMatch)}) distance: ${bestDistance}`);
       return bestMatch;
     }
     
-    console.log(`❌ No color match for: rgb(${rInt}, ${gInt}, ${bInt}) (tolerance: ${tolerance})`);
     return undefined;
   }
   
@@ -171,7 +173,8 @@ class ConnectionThread {
     
     // Handle range events with different start/end IDs
     if (typeof eventData === 'object' && eventData.startId !== undefined) {
-      const startName = this.getEventName(eventData.startId);
+      // For cross-thread events, use the provided start event name if available
+      const startName = eventData.startEventName || this.getEventName(eventData.startId);
       const endName = this.getEventName(eventData.endId);
       return `${startName} → ${endName}`;
     }
@@ -206,16 +209,12 @@ class ConnectionThread {
       this.gl.readPixels(clampedX, clampedY, 1, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.pixelBuffer);
       
       // Convert to 0-1 range
-      const color = {
+      return {
         r: this.pixelBuffer[0] / 255,
         g: this.pixelBuffer[1] / 255,
         b: this.pixelBuffer[2] / 255,
         a: this.pixelBuffer[3] / 255
       };
-      
-      console.log(`🔍 Read pixel: rgb(${this.pixelBuffer[0]}, ${this.pixelBuffer[1]}, ${this.pixelBuffer[2]}) at canvas(${canvasX}, ${canvasY})`);
-      
-      return color;
     } catch (error) {
       return { r: 0, g: 0, b: 0, a: 0 };
     }
@@ -282,6 +281,7 @@ class ConnectionThread {
       attribute vec3 a_instanceColor; // RGB color for this instance
       attribute float a_instanceWidth; // Width for rectangles (unused for triangles)
       attribute float a_instanceYPos; // Y position (0-255)
+      attribute float a_instanceCrossThread; // 1.0 for cross-thread, 0.0 for local (only for rectangles)
       
       uniform vec2 u_canvasSize;
       uniform vec2 u_triangleSize;
@@ -291,6 +291,7 @@ class ConnectionThread {
       uniform float u_rowHeight; // Height per Y level in CSS pixels
       
       varying vec3 v_color;
+      varying float v_crossThread;
 
       void main() {
         // Calculate vertical offset based on Y position
@@ -332,8 +333,9 @@ class ConnectionThread {
           gl_Position = vec4(clipSpace, 0.0, 1.0);
         }
         
-        // Pass through the color
+        // Pass through the color and cross-thread flag
         v_color = a_instanceColor;
+        v_crossThread = a_instanceCrossThread;
       }
     `;
 
@@ -341,9 +343,24 @@ class ConnectionThread {
     const fragmentShaderSource = `
       precision mediump float;
       varying vec3 v_color;
+      varying float v_crossThread;
 
       void main() {
-        gl_FragColor = vec4(v_color, 1.0);
+        vec3 finalColor = v_color;
+        
+        // Add diagonal line pattern for cross-thread events
+        if (v_crossThread > 0.5) {
+          vec2 coord = gl_FragCoord.xy;
+          // Create diagonal lines with 4px spacing
+          float pattern = mod(coord.x + coord.y, 8.0);
+          if (pattern < 2.0) {
+            // Make diagonal lines lighter (blend with background color)
+            vec3 backgroundColor = vec3(0.1333, 0.129, 0.196);
+            finalColor = mix(finalColor, backgroundColor, 0.4);
+          }
+        }
+        
+        gl_FragColor = vec4(finalColor, 1.0);
       }
     `;
 
@@ -382,7 +399,8 @@ class ConnectionThread {
         this.pendingBufferData.rangeCount,
         this.pendingBufferData.instantYPositions,
         this.pendingBufferData.rangeYPositions,
-        this.pendingBufferData.maxYPosition
+        this.pendingBufferData.maxYPosition,
+        this.pendingBufferData.rangeCrossThreadFlags
       );
     }
     
@@ -455,6 +473,7 @@ class ConnectionThread {
     this.rangePositionBuffer = this.gl.createBuffer();
     this.rangeColorBuffer = this.gl.createBuffer();
     this.rangeYPositionBuffer = this.gl.createBuffer();
+    this.rangeCrossThreadBuffer = this.gl.createBuffer();
   }
 
   initUniforms() {
@@ -482,12 +501,12 @@ class ConnectionThread {
   }
 
   // Update WebGL buffers
-  updateBuffers(instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition) {
+  updateBuffers(instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags) {
     if (!this.gl || !this.instantPositionBuffer || !this.instantColorBuffer || !this.rangePositionBuffer || !this.rangeColorBuffer) {
       // Store data for when WebGL becomes ready
       this.pendingBufferData = { 
         instantPositions, instantColors, instantCount, instantYPositions,
-        rangePositions, rangeColors, rangeCount, rangeYPositions, maxYPosition 
+        rangePositions, rangeColors, rangeCount, rangeYPositions, maxYPosition, rangeCrossThreadFlags
       };
       return;
     }
@@ -511,6 +530,10 @@ class ConnectionThread {
     
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeYPositionBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, rangeYPositions, this.gl.DYNAMIC_DRAW);
+    
+    // Update cross-thread flags buffer
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeCrossThreadBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, rangeCrossThreadFlags, this.gl.DYNAMIC_DRAW);
     
     this.instantCount = instantCount;
     this.rangeCount = rangeCount;
@@ -616,6 +639,7 @@ class ConnectionThread {
     const colorLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instanceColor');
     const widthLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instanceWidth');
     const yPosLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instanceYPos');
+    const crossThreadLocation = this.gl.getAttribLocation(this.shaderProgram, 'a_instanceCrossThread');
     const rectModeLocation = this.gl.getUniformLocation(this.shaderProgram, 'u_isRectMode');
 
     // Render triangles (instant events)
@@ -645,6 +669,10 @@ class ConnectionThread {
       // Disable width attribute for triangles
       this.gl.disableVertexAttribArray(widthLocation);
       this.gl.vertexAttrib1f(widthLocation, 0.0);
+      
+      // Disable cross-thread attribute for triangles (instant events are always local)
+      this.gl.disableVertexAttribArray(crossThreadLocation);
+      this.gl.vertexAttrib1f(crossThreadLocation, 0.0);
 
       // Configure instancing
       if (this.gl.vertexAttribDivisor) {
@@ -688,6 +716,11 @@ class ConnectionThread {
       this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeYPositionBuffer);
       this.gl.enableVertexAttribArray(yPosLocation);
       this.gl.vertexAttribPointer(yPosLocation, 1, this.gl.FLOAT, false, 0, 0);
+      
+      // Set up cross-thread attribute
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.rangeCrossThreadBuffer);
+      this.gl.enableVertexAttribArray(crossThreadLocation);
+      this.gl.vertexAttribPointer(crossThreadLocation, 1, this.gl.FLOAT, false, 0, 0);
 
       // Configure instancing
       if (this.gl.vertexAttribDivisor) {
@@ -696,6 +729,7 @@ class ConnectionThread {
         this.gl.vertexAttribDivisor(widthLocation, 1); // Per instance
         this.gl.vertexAttribDivisor(colorLocation, 1); // Per instance
         this.gl.vertexAttribDivisor(yPosLocation, 1); // Per instance
+        this.gl.vertexAttribDivisor(crossThreadLocation, 1); // Per instance
       }
 
       // Draw rectangles
@@ -710,6 +744,7 @@ class ConnectionThread {
     this.gl.disableVertexAttribArray(colorLocation);
     this.gl.disableVertexAttribArray(widthLocation);
     this.gl.disableVertexAttribArray(yPosLocation);
+    this.gl.disableVertexAttribArray(crossThreadLocation);
   }
 
   // Cleanup WebGL resources
@@ -801,9 +836,9 @@ class ConnectionThreadStore {
   }
 
   // Update thread buffers
-  updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition) {
+  updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags) {
     const thread = this.getOrCreateThread(thread_ord_id);
-    thread.updateBuffers(instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition);
+    thread.updateBuffers(instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags);
   }
   
   // Thread name management

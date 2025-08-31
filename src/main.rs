@@ -3,7 +3,6 @@ mod tasks;
 pub(crate) mod shared;
 
 use log::LevelFilter;
-use sparkles::config::SparklesConfig;
 use crate::shared::SparklesWebsocketShared;
 use crate::tasks::discover::DiscoverTask;
 use crate::tasks::{sparkles_connection_manager, web_server};
@@ -15,10 +14,10 @@ async fn main() {
     simple_logger::SimpleLogger::new().with_level(LevelFilter::Info)
         .with_module_level("multicast_discovery_socket", LevelFilter::Warn).init().unwrap();
 
+    #[cfg(feature = "self-tracing")]
     let g = sparkles::init(
-        SparklesConfig::default()
+        sparkles::config::SparklesConfig::default()
             .with_udp_multicast_default()
-            .with_flush_threshold(1)
     );
 
     let shutdown = ShutdownSignal::register_ctrl_c();

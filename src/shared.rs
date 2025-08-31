@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Instant;
 use parking_lot::Mutex;
 use sparkles_parser::TracingEventId;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -197,7 +196,7 @@ impl WsConnection {
     }
 
     pub async fn request_new_events(&mut self, id: u32, start: u64, end: u64) -> anyhow::Result<tokio::sync::mpsc::Receiver<(u64, Vec<u8>, EventsSkipStats)>> {
-        let (sender, receiver) = tokio::sync::mpsc::channel(5);
+        let (sender, receiver) = tokio::sync::mpsc::channel(100_000);
         let msg = WsToSparklesMessage::RequestNewRange { start, end, events_channel: sender };
         self.send_message(id, msg)?;
         Ok(receiver)

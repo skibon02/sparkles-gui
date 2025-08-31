@@ -99,12 +99,10 @@ class ActiveConnection {
       // If scrolling is enabled, automatically move the end to the new max
       if (this.isScrollingEnabled) {
         this.currentView.end = timestamps.max;
-        console.log(`Auto-scrolling: moved end to ${timestamps.max}`);
         this.scheduleEventRequest();
       }
       // If scrolling is disabled but new data is in display range, still request
       else if (previousMax < this.currentView.end) {
-        console.log(`Max timestamp increased from ${previousMax} to ${timestamps.max}, triggering auto-request since ${previousMax} < ${this.currentView.end}`);
         this.scheduleEventRequest();
       }
     }
@@ -431,8 +429,12 @@ class ActiveConnection {
       });
     }
 
-    // Parse Range Events
-    while (offset < view.byteLength - 4) {
+    // Parse Local Range Events
+    const localRangeEventsLen = view.getUint32(offset, true);
+    offset += 4;
+    const localRangeEventsEnd = offset + localRangeEventsLen;
+
+    while (offset < localRangeEventsEnd) {
       const start = Number(view.getBigUint64(offset, true));
       offset += 8;
       const end = Number(view.getBigUint64(offset, true));
@@ -450,7 +452,39 @@ class ActiveConnection {
         start_event_id: start_id,
         end_event_id: end_id,
         y_position: yPos,
-        color_seed: `range-${start_id}-${end_id}`
+        color_seed: `range-${start_id}-${end_id}`,
+        is_cross_thread: false
+      });
+    }
+
+    // Parse Cross-Thread Range Events
+    const crossThreadRangeEventsLen = view.getUint32(offset, true);
+    offset += 4;
+    const crossThreadRangeEventsEnd = offset + crossThreadRangeEventsLen;
+
+    while (offset < crossThreadRangeEventsEnd) {
+      const start = Number(view.getBigUint64(offset, true));
+      offset += 8;
+      const end = Number(view.getBigUint64(offset, true));
+      offset += 8;
+      const start_id = view.getUint8(offset);
+      offset += 1;
+      const end_id = view.getUint8(offset);
+      offset += 1;
+      const yPos = view.getUint8(offset);
+      offset += 1;
+      const thread_id = Number(view.getBigUint64(offset, true));
+      offset += 8;
+
+      rangeEvents.push({
+        start_timestamp: start,
+        end_timestamp: end,
+        start_event_id: start_id,
+        end_event_id: end_id,
+        y_position: yPos,
+        color_seed: `cross-range-${start_id}-${end_id}-${thread_id}`,
+        is_cross_thread: true,
+        thread_id: thread_id
       });
     }
 
@@ -529,6 +563,7 @@ class ActiveConnection {
     const rangePositions = new Float32Array(rangeEventCount * 2); // start and width for each rectangle
     const rangeColors = new Float32Array(rangeEventCount * 3); // RGB per rectangle
     const rangeYPositions = new Float32Array(rangeEventCount); // Y positions
+    const rangeCrossThreadFlags = new Float32Array(rangeEventCount); // Cross-thread flags
 
     for (let i = 0; i < rangeEvents.length; i++) {
       const event = rangeEvents[i];
@@ -545,6 +580,9 @@ class ActiveConnection {
       // Store y position
       rangeYPositions[i] = event.y_position;
       
+      // Store cross-thread flag (1.0 for cross-thread, 0.0 for local)
+      rangeCrossThreadFlags[i] = event.is_cross_thread ? 1.0 : 0.0;
+      
       // Generate color using the existing logic
       const rgb = generateColorForThread(event.color_seed);
 
@@ -558,11 +596,24 @@ class ActiveConnection {
       
       // Store color mapping for cursor feedback using original integer values (use start and end event IDs)
       const thread = this.threadStore.getOrCreateThread(thread_ord_id);
-      thread.addColorMapping(event.start_event_id, rgb[0], rgb[1], rgb[2], event.end_event_id);
+      
+      // For cross-thread events, we need to resolve the start event name from the starting thread
+      if (event.is_cross_thread && event.thread_id !== undefined) {
+        // The start event ID should be resolved using the starting thread's event names
+        const startThread = this.threadStore.getOrCreateThread(event.thread_id);
+        const startEventName = startThread.getEventName(event.start_event_id);
+        
+        // Store the color mapping in the ending thread (where the event is rendered)
+        // but use the resolved start event name from the starting thread
+        thread.addColorMapping(event.start_event_id, rgb[0], rgb[1], rgb[2], event.end_event_id, startEventName);
+      } else {
+        // For local range events, use the current thread's event names
+        thread.addColorMapping(event.start_event_id, rgb[0], rgb[1], rgb[2], event.end_event_id);
+      }
     }
 
     // Update buffers for this thread
-    this.threadStore.updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantEventCount, rangePositions, rangeColors, rangeEventCount, instantYPositions, rangeYPositions, maxYPosition);
+    this.threadStore.updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantEventCount, rangePositions, rangeColors, rangeEventCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags);
 
     trace.end(s, "updateThreadBuffers")
   }

@@ -1,4 +1,4 @@
-use sparkles_parser::TracingEventId;
+//! Helper for heuristically skipping events keeping only most meaningful ones at low zoom levels.
 
 /// Generalized skip logic helper for both instant and range events
 pub struct EventSkipper {

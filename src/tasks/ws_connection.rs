@@ -13,11 +13,11 @@ use crate::tasks::web_server::DiscoveryShared;
 
 pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, mut conn: WsConnection) -> anyhow::Result<()> {
     info!("New WebSocket connection: {}", conn.id());
+    #[cfg(feature = "self-tracing")]
+    let g = sparkles::range_event_start!("Websocket connection handler");
     let mut discover_list_ticker = interval(Duration::from_millis(400));
-    let mut active_connections_ticker = interval(Duration::from_millis(100));
-    let mut sync_ticker = interval(Duration::from_millis(200));
-
-    let start_time = Instant::now();
+    let mut active_connections_ticker = interval(Duration::from_millis(200));
+    let mut sync_ticker = interval(Duration::from_millis(100));
 
     let mut last_msg_id = 0;
 
@@ -29,6 +29,8 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
     loop {
         tokio::select! {
             msg = socket.recv() => {
+                #[cfg(feature = "self-tracing")]
+                let g = sparkles::range_event_start!("Websocket: handle incoming message");
                 let Some(msg) = msg else {
                     error!("Client disconnected!");
                     return Ok(());
@@ -103,13 +105,6 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
             _ = discover_list_ticker.tick() => {
                 let clients = shared_data.0.lock().discovered_clients.clone();
                 let msg = MessageFromServer::DiscoveredClients {clients};
-                let json = match serde_json::to_string(&msg) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Failed to serialize discovered clients: {e}");
-                        continue;
-                    }
-                };
 
                 let _ = send_websocket(&mut socket, msg).await;
             }
