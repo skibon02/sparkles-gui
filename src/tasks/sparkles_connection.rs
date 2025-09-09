@@ -9,7 +9,8 @@ use std::time::Instant;
 use log::{debug, error, info, warn};
 use sparkles_parser::packet_decoder::PacketDecoder;
 use sparkles_parser::parsed::ParsedEvent;
-use sparkles_parser::{SparklesParser, TracingEventId};
+use sparkles_parser::{SparklesParser, SparklesParserEvent, TracingEventId};
+use sparkles_parser::parser::thread_parser::ThreadParserEvent;
 use tokio::select;
 use crate::shared::{SparklesConnection, WsToSparklesMessage};
 use crate::tasks::sparkles_connection::storage::ClientStorage;
@@ -469,44 +470,50 @@ fn spawn_connection(addr: SocketAddr, events_tx: tokio::sync::mpsc::Sender<Spark
 
         let events_tx2 = events_tx.clone();
         let mut thread_infos = HashMap::new();
-        SparklesParser::new().parse_to_end(decoder, move |evs, thread_info, event_names| {
-            #[cfg(feature = "self-tracing")]
-            let g = sparkles::range_event_start!("got new events");
-            if let Some(thread_name) = &thread_info.thread_name {
-                let entry = thread_infos.entry(thread_info.thread_ord_id);
-                match entry {
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(thread_name.clone());
-                        events_tx.blocking_send(SparklesConnectionMessage::UpdateThreadName {
-                            thread_ord_id: thread_info.thread_ord_id,
-                            thread_name: thread_name.clone(),
-                        }).unwrap();
-                    },
-                    std::collections::hash_map::Entry::Occupied(mut e) => {
-                        let existing_thread_name = e.get_mut();
-                        if existing_thread_name != thread_name {
-                            *existing_thread_name = thread_name.clone();
-                            events_tx.blocking_send(SparklesConnectionMessage::UpdateThreadName {
-                                thread_ord_id: thread_info.thread_ord_id,
-                                thread_name: thread_name.clone(),
-                            }).unwrap();
+        SparklesParser::new().parse_to_end(decoder, move |evt| {
+            match evt {
+                SparklesParserEvent::ThreadParserEvent(ThreadParserEvent::NewEvents(evs), thread_info) => {
+                    #[cfg(feature = "self-tracing")]
+                    let g = sparkles::range_event_start!("got new events");
+                    if let Some(thread_name) = &thread_info.thread_name {
+                        let entry = thread_infos.entry(thread_info.thread_ord_id);
+                        match entry {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(thread_name.clone());
+                                events_tx.blocking_send(SparklesConnectionMessage::UpdateThreadName {
+                                    thread_ord_id: thread_info.thread_ord_id,
+                                    thread_name: thread_name.clone(),
+                                }).unwrap();
+                            },
+                            std::collections::hash_map::Entry::Occupied(mut e) => {
+                                let existing_thread_name = e.get_mut();
+                                if existing_thread_name != thread_name {
+                                    *existing_thread_name = thread_name.clone();
+                                    events_tx.blocking_send(SparklesConnectionMessage::UpdateThreadName {
+                                        thread_ord_id: thread_info.thread_ord_id,
+                                        thread_name: thread_name.clone(),
+                                    }).unwrap();
+                                }
+                            }
                         }
                     }
+                    #[cfg(feature = "self-tracing")]
+                    drop(g);
+                    events_tx.blocking_send(SparklesConnectionMessage::Events {
+                        thread_ord_id: thread_info.thread_ord_id,
+                        events: evs.to_vec(),
+                    }).unwrap();
                 }
+                SparklesParserEvent::ThreadParserEvent(ThreadParserEvent::EventNamesChanged(new_event_names), thread_info) => {
+                    events_tx2.blocking_send(SparklesConnectionMessage::UpdateEventNames {
+                        thread_ord_id: thread_info.thread_ord_id,
+                        event_names: new_event_names.iter().map(|(id, (name, _))| {
+                            (*id, Arc::from(&**name))
+                        }).collect()
+                    }).unwrap();
+                }
+                _ => {}
             }
-            #[cfg(feature = "self-tracing")]
-            drop(g);
-            events_tx.blocking_send(SparklesConnectionMessage::Events {
-                thread_ord_id: thread_info.thread_ord_id,
-                events: evs.to_vec(),
-            }).unwrap();
-        }, |thread_info, new_event_names| {
-            events_tx2.blocking_send(SparklesConnectionMessage::UpdateEventNames {
-                thread_ord_id: thread_info.thread_ord_id,
-                event_names: new_event_names.iter().map(|(id, (name, _))| {
-                    (*id, Arc::from(&**name))
-                }).collect()
-            }).unwrap();
         }).unwrap();
     }).unwrap();
 }
