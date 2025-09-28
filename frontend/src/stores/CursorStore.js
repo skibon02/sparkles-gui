@@ -8,7 +8,7 @@ class CursorStore {
   // Current canvas context
   activeCanvas = null;
   activeConnectionId = null;
-  activeThreadId = null;
+  activeChannelId = null;
   
   // Color feedback
   pixelColor = { r: 0, g: 0, b: 0, a: 0 };
@@ -28,10 +28,10 @@ class CursorStore {
   })
   
   // Set active canvas context
-  setActiveCanvas = action((canvas, connectionId, threadId) => {
+  setActiveCanvas = action((canvas, connectionId, channelId) => {
     this.activeCanvas = canvas;
     this.activeConnectionId = connectionId;
-    this.activeThreadId = threadId;
+    this.activeChannelId = channelId;
   })
   
   // Set pixel color and event info from WebGL reading
@@ -50,7 +50,7 @@ class CursorStore {
     this.isVisible = false;
     this.activeCanvas = null;
     this.activeConnectionId = null;
-    this.activeThreadId = null;
+    this.activeChannelId = null;
     this.currentEventName = null;
   })
   

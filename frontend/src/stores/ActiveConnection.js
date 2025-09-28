@@ -647,7 +647,7 @@ class ActiveConnection {
   
   // Thread name management
   setThreadName(thread_ord_id, name) {
-    this.threadStore.setThreadName(thread_ord_id, name);
+    this.threadStore.setChannelName(thread_ord_id, name);
   }
   
   getThreadName(thread_ord_id) {

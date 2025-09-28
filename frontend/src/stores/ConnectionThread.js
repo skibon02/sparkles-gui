@@ -784,7 +784,7 @@ class ConnectionThread {
 
 class ConnectionThreadStore {
   // Map<thread_ord_id, ConnectionThread>
-  threads = new Map();
+  channels = new Map();
   connectionId = null;
 
   constructor(connectionId) {
@@ -794,21 +794,21 @@ class ConnectionThreadStore {
 
   // Get or create thread (similar to WebSocketStore pattern)
   getOrCreateThread(thread_ord_id) {
-    if (!this.threads.has(thread_ord_id)) {
+    if (!this.channels.has(thread_ord_id)) {
       const thread = new ConnectionThread(thread_ord_id, this.connectionId);
-      this.threads.set(thread_ord_id, thread);
+      this.channels.set(thread_ord_id, thread);
     }
-    return this.threads.get(thread_ord_id);
+    return this.channels.get(thread_ord_id);
   }
 
   // Get existing thread
   getThread(thread_ord_id) {
-    return this.threads.get(thread_ord_id);
+    return this.channels.get(thread_ord_id);
   }
 
   // Get all threads
   getAllThreads() {
-    return Array.from(this.threads.values());
+    return Array.from(this.channels.values());
   }
 
   // Get thread skip stats
@@ -820,10 +820,10 @@ class ConnectionThreadStore {
   // Get all thread skip stats
   getAllThreadSkipStats() {
     const stats = new Map();
-    for (const [threadId, thread] of this.threads) {
+    for (const [channelId, thread] of this.channels) {
       const skipStats = thread.getSkipStats();
       if (skipStats) {
-        stats.set(threadId, skipStats);
+        stats.set(channelId, skipStats);
       }
     }
     return stats;
@@ -844,7 +844,7 @@ class ConnectionThreadStore {
   // Thread name management
   setThreadName(thread_ord_id, name) {
     const thread = this.getOrCreateThread(thread_ord_id);
-    thread.setThreadName(name);
+    thread.setChannelName(name);
   }
   
   getThreadName(thread_ord_id) {
@@ -877,14 +877,14 @@ class ConnectionThreadStore {
   
   // Expanded state management for all threads
   setAllThreadsExpanded(isExpanded) {
-    for (const thread of this.threads.values()) {
+    for (const thread of this.channels.values()) {
       thread.setExpanded(isExpanded);
     }
   }
 
   // Get thread count
   getThreadCount() {
-    return this.threads.size;
+    return this.channels.size;
   }
 
   // Canvas management methods (similar to WebSocketStore pattern)
@@ -907,10 +907,10 @@ class ConnectionThreadStore {
 
   // Cleanup all threads
   cleanup() {
-    for (const thread of this.threads.values()) {
+    for (const thread of this.channels.values()) {
       thread.cleanup();
     }
-    this.threads.clear();
+    this.channels.clear();
   }
 }
 

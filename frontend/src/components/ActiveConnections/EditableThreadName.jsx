@@ -24,8 +24,8 @@ const EditableThreadName = observer(({ store, connectionId, thread }) => {
   
   const handleSave = () => {
     if (connection) {
-      connection.setThreadName(thread.thread_ord_id, editValue);
-      store.setThreadName(connectionId, thread.thread_ord_id, editValue);
+      connection.setChannelName(thread.thread_ord_id, editValue);
+      store.setChannelName(connectionId, thread.thread_ord_id, editValue);
     }
     setIsEditing(false);
   };

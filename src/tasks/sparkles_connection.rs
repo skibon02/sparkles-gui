@@ -8,12 +8,13 @@ use std::thread;
 use std::time::Instant;
 use log::{debug, error, info, warn};
 use sparkles_parser::packet_decoder::PacketDecoder;
-use sparkles_parser::parsed::ParsedEvent;
-use sparkles_parser::{SparklesParser, SparklesParserEvent, TracingEventId};
-use sparkles_parser::parser::thread_parser::ThreadParserEvent;
+use sparkles_parser::parsed::{ParsedEvent, ParsedExternalEvent};
+use sparkles_parser::{EventNameId, SparklesParser, SparklesParserEvent};
+use sparkles_parser::parser::external_parser::{ExternalEventNamesStore, ExternalParserEvent};
+use sparkles_parser::parser::thread_parser::{EventNamesStore, ThreadParserEvent};
 use tokio::select;
 use crate::shared::{SparklesConnection, WsToSparklesMessage};
-use crate::tasks::sparkles_connection::storage::ClientStorage;
+use crate::tasks::sparkles_connection::storage::{ClientStorage, GeneralEventNameId, GeneralEventNamesStore, StoredInstantEvent};
 use crate::tasks::sparkles_connection::event_skipper::EventSkippingProcessor;
 
 pub fn spawn_conn_handler(addr: SocketAddr, conn: SparklesConnection) {
@@ -36,8 +37,8 @@ const MAX_EV_CNT: usize = 50_000;
 
 #[derive(Debug)]
 enum RangeEventType {
-    Local(u64, u64, TracingEventId, Option<TracingEventId>),
-    CrossThread(u64, u64, TracingEventId, Option<TracingEventId>, u64),
+    Local(u64, u64, GeneralEventNameId, Option<GeneralEventNameId>),
+    CrossThread(u64, u64, GeneralEventNameId, Option<GeneralEventNameId>, u64),
 }
 
 impl RangeEventType {
@@ -55,14 +56,14 @@ impl RangeEventType {
         }
     }
 
-    fn name_id(&self) -> TracingEventId {
+    fn name_id(&self) -> GeneralEventNameId {
         match self {
             RangeEventType::Local(_, _, name_id, _) => *name_id,
             RangeEventType::CrossThread(_, _, name_id, _, _) => *name_id,
         }
     }
 
-    fn end_name_id(&self) -> Option<TracingEventId> {
+    fn end_name_id(&self) -> Option<GeneralEventNameId> {
         match self {
             RangeEventType::Local(_, _, _, end_name_id) => *end_name_id,
             RangeEventType::CrossThread(_, _, _, end_name_id, _) => *end_name_id,
@@ -82,8 +83,8 @@ fn merge_range_events<I1, I2>(
     cross_thread_events: I2,
 ) -> impl Iterator<Item = RangeEventType>
 where
-    I1: Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>)>,
-    I2: Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>, u64)>,
+    I1: Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>)>,
+    I2: Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>, u64)>,
 {
     let mut local_peekable = local_events.map(|(start, end, name_id, end_name_id)| {
         RangeEventType::Local(start, end, name_id, end_name_id)
@@ -116,8 +117,8 @@ fn process_range_events<I1, I2>(
     skip_thr: u64,
 ) -> (Vec<u8>, Vec<u8>, u8)
 where
-    I1: Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>)>,
-    I2: Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>, u64)>,
+    I1: Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>)>,
+    I2: Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>, u64)>,
 {
     let mut active_ranges: Vec<(u64, u8)> = Vec::new(); // (end_time, y_position)
     let mut used_y_levels = [false; 256]; // Track which Y levels are in use
@@ -181,9 +182,9 @@ where
             
             range_buf.extend_from_slice(&range_start.to_le_bytes());
             range_buf.extend_from_slice(&range_end.to_le_bytes());
-            range_buf.push(start_id);
+            range_buf.extend_from_slice(&start_id.to_le_bytes());
             if let Some(end_id) = end_id {
-                range_buf.push(end_id);
+                range_buf.extend_from_slice(&end_id.to_le_bytes());
             } else {
                 range_buf.push(255);
             }
@@ -201,7 +202,7 @@ where
 }
 
 struct ActiveRangeRequest {
-    resp: tokio::sync::mpsc::Sender<(u64, Vec<u8>, EventsSkipStats)>,
+    resp: tokio::sync::mpsc::Sender<(ChannelId, Vec<u8>, EventsSkipStats)>,
     start: u64,
     end: u64,
 }
@@ -228,25 +229,25 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                         info!("Connection manager: added new range request for start: {start}, end: {end}");
                     }
                     WsToSparklesMessage::GetEventNames {
-                        thread_id,
+                        channel_id,
                         resp
                     } => {
-                        if let Some(event_storage) = storage.thread_events.get(&thread_id) {
-                            let event_names = event_storage.event_names.clone();
+                        if let Some(event_storage) = storage.channel_events.get(&channel_id) {
+                            let event_names = event_storage.event_names();
                             let _ = resp.send(event_names);
                         }
                     }
-                    WsToSparklesMessage::GetThreadNames {
+                    WsToSparklesMessage::GetChannelNames {
                         resp
                     } => {
-                        let _ = resp.send(storage.thread_names.clone());
+                        let _ = resp.send(storage.channel_names.clone());
                     }
-                    WsToSparklesMessage::SetThreadName {
-                        thread_id,
+                    WsToSparklesMessage::SetChannelName {
+                        channel_id,
                         name,
                         resp
                     } => {
-                        storage.thread_names.insert(thread_id, name);
+                        storage.channel_names.insert(channel_id, name);
                         let _ = resp.send(());
                     }
                     WsToSparklesMessage::GetConnectionTimestamps {
@@ -276,10 +277,11 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 if let Some(msg) = res {
                     match msg {
                         SparklesConnectionMessage::Events { thread_ord_id, events } => {
+                            let channel_id = ChannelId::Thread(thread_ord_id);
                             #[cfg(feature = "self-tracing")]
                             let g = sparkles::range_event_start!("storing new events");
-                            let thread_storage = storage.thread_events
-                                .entry(thread_ord_id)
+                            let thread_storage = storage.channel_events
+                                .entry(channel_id)
                                 .or_default();
 
                             let mut min_tm: Option<u64> = None;
@@ -293,7 +295,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                                     } => {
                                         min_tm = Some(min_tm.map_or(tm, |min| min.min(tm)));
                                         max_tm = Some(max_tm.map_or(tm, |max| max.max(tm)));
-                                        thread_storage.instant_events.insert(tm, name_id);
+                                        thread_storage.insert_instant_event(tm, name_id as u16);
                                     }
                                     ParsedEvent::Range {
                                         start,
@@ -305,41 +307,64 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                                         min_tm = Some(min_tm.map_or(start, |min| min.min(start).min(end)));
                                         max_tm = Some(max_tm.map_or(end, |max| max.max(start).max(end)));
 
-                                        if let Some(start_thread_ord_id) = start_thread_ord_id {
-                                            thread_storage.cross_thread_range_events.insert(start, end, name_id, end_name_id, start_thread_ord_id);
-                                        }
-                                        else {
-                                            thread_storage.range_events.insert_simple(start, end, name_id, end_name_id);
-                                        }
+                                        thread_storage.insert_range_event(start, end, name_id as u16, end_name_id.map(|id| id as u16), start_thread_ord_id);
                                     }
                                 }
                             }
 
-                            if let Some(min) = min_tm && let Some(max) = max_tm {
-                                let now = Instant::now();
-                                let last_event_tm = max;
-                                
-                                if let Some(conn_ts) = &mut storage.conn_timestamps {
-                                    conn_ts.last_sync = (now, last_event_tm);
-                                    conn_ts.min_tm = conn_ts.min_tm.min(min);
-                                    conn_ts.max_tm = conn_ts.max_tm.max(max);
-                                } else {
-                                    storage.conn_timestamps = Some(storage::ConnectionTimestamps {
-                                        last_sync: (now, last_event_tm),
-                                        min_tm: min,
-                                        max_tm: max,
-                                    });
+                            storage.update_conn_timestamps(min_tm, max_tm);
+                        }
+                        SparklesConnectionMessage::ExternalEvents { events, ext_ord_id } => {
+                            let channel_id = ChannelId::External(ext_ord_id);
+                            #[cfg(feature = "self-tracing")]
+                            let g = sparkles::range_event_start!("storing new external events");
+                            let ext_storage = storage.channel_events
+                                .entry(channel_id)
+                                .or_default();
+
+                            let mut min_tm: Option<u64> = None;
+                            let mut max_tm: Option<u64> = None;
+
+                            for event in events {
+                                match event {
+                                    ParsedExternalEvent::Instant {
+                                        tm,
+                                        name_id
+                                    } => {
+                                        min_tm = Some(min_tm.map_or(tm, |min| min.min(tm)));
+                                        max_tm = Some(max_tm.map_or(tm, |max| max.max(tm)));
+                                        ext_storage.insert_instant_event(tm, name_id as u16);
+                                    }
+                                    ParsedExternalEvent::Range {
+                                        start,
+                                        end,
+                                        name_id,
+                                        end_name_id,
+                                    } => {
+                                        min_tm = Some(min_tm.map_or(start, |min| min.min(start).min(end)));
+                                        max_tm = Some(max_tm.map_or(end, |max| max.max(start).max(end)));
+
+                                        ext_storage.insert_range_event(start, end, name_id as u16, end_name_id.and_then(|id| {
+                                            if id == name_id {
+                                                None
+                                            } else {
+                                                Some(id as u16)
+                                            }
+                                        }), None);
+                                    }
                                 }
                             }
+
+                            storage.update_conn_timestamps(min_tm, max_tm);
                         }
-                        SparklesConnectionMessage::UpdateThreadName { thread_ord_id, thread_name } => {
-                            storage.thread_names.insert(thread_ord_id, thread_name.clone());
+                        SparklesConnectionMessage::UpdateChannelName { channel_id, thread_name } => {
+                            storage.channel_names.insert(channel_id, thread_name);
                         }
-                        SparklesConnectionMessage::UpdateEventNames { thread_ord_id, event_names } => {
-                            storage.thread_events
-                                .entry(thread_ord_id)
+                        SparklesConnectionMessage::UpdateChannelEventNames { channel_id, event_names } => {
+                            storage.channel_events
+                                .entry(channel_id)
                                 .or_default()
-                                .event_names = event_names;
+                                .update_event_names(event_names)
                         }
                     }
 
@@ -363,7 +388,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 end,
             } = active_sending_requests.remove(&k).unwrap();
             
-            let len_requests = storage.thread_events.len();
+            let len_requests = storage.channel_events.len();
             let Ok(mut permits) = resp.try_reserve_many(len_requests) else {
                 // reserve failed, push back the request
                 active_sending_requests.insert(k, ActiveRangeRequest {
@@ -376,7 +401,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
             };
             #[cfg(feature = "self-tracing")]
             let g = sparkles::range_event_start!("request events");
-            for (thread_ord_id, thread_storage) in storage.thread_events.iter() {
+            for (channel_id, channel_storage) in storage.channel_events.iter() {
                 #[cfg(feature = "self-tracing")]
                 let g = sparkles::range_event_start!("request thread events");
                 let mut res_buf = Vec::new();
@@ -384,9 +409,9 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
 
                 #[cfg(feature = "self-tracing")]
                 let gc = sparkles::range_event_start!("count events");
-                let instant_event_cnt = thread_storage.request_instant_events(start, end).count();
-                let range_event_cnt = thread_storage.request_range_events(start, end).count();
-                let cross_thread_range_event_cnt = thread_storage.request_cross_thread_range_events(start, end).count();
+                let instant_event_cnt = channel_storage.request_instant_events(start, end).count();
+                let range_event_cnt = channel_storage.request_range_events(start, end).count();
+                let cross_thread_range_event_cnt = channel_storage.request_cross_thread_range_events(start, end).count();
                 #[cfg(feature = "self-tracing")]
                 drop(gc);
 
@@ -397,8 +422,8 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 #[cfg(feature = "self-tracing")]
                 let g2 = sparkles::range_event_start!("process range events");
                 let (range_buf, foreign_range_buf, max_range_y) = process_range_events(
-                    thread_storage.request_range_events(start, end),
-                    thread_storage.request_cross_thread_range_events(start, end),
+                    channel_storage.request_range_events(start, end),
+                    channel_storage.request_cross_thread_range_events(start, end),
                     &mut processor,
                     skip_thr,
                 );
@@ -409,14 +434,16 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 #[cfg(feature = "self-tracing")]
                 let g3 = sparkles::range_event_start!("process instant events");
                 let instant_y = if max_range_y < 255 { max_range_y + 1 } else { 255 };
-                let mut prev_instant: Option<(u64, TracingEventId)> = None;
-                for (tm, id) in thread_storage.request_instant_events(start, end) {
+                let mut prev_instant: Option<(u64, GeneralEventNameId)> = None;
+                for event in channel_storage.request_instant_events(start, end) {
+                    let tm = event.tm;
+                    let id = event.name_id;
                     if let Some((prev_tm, prev_id)) = prev_instant {
                         let tm_diff = tm - prev_tm;
 
                         if processor.should_keep_instant(tm_diff) {
                             buf.extend_from_slice(&prev_tm.to_le_bytes());
-                            buf.push(prev_id);
+                            buf.extend_from_slice(&prev_id.to_le_bytes());
                             buf.push(instant_y);
                         }
                     }
@@ -426,7 +453,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                 // Handle last instant event
                 if let Some((tm, id)) = prev_instant {
                     buf.extend_from_slice(&tm.to_le_bytes());
-                    buf.push(id);
+                    buf.extend_from_slice(&id.to_le_bytes());
                     buf.push(instant_y);
                 }
                 #[cfg(feature = "self-tracing")]
@@ -452,11 +479,11 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     total_range,
                 };
 
-                debug!("Connection manager: sending range request response to {} for thread {}: start={}, end={}, instant data size={}, local range data size={}, cross-thread range data size={}. Skipped: instant {}/{}, range {}/{}",
-                    addr, thread_ord_id, start, end, buf.len(), range_buf.len(), foreign_range_buf.len(), skipped_instant, total_instant, skipped_range, total_range);
+                debug!("Connection manager: sending range request response to {} for channel {:?}: start={}, end={}, instant data size={}, local range data size={}, cross-thread range data size={}. Skipped: instant {}/{}, range {}/{}",
+                    addr, channel_id, start, end, buf.len(), range_buf.len(), foreign_range_buf.len(), skipped_instant, total_instant, skipped_range, total_range);
                 #[cfg(feature = "self-tracing")]
                 let g4 = sparkles::range_event_start!("send response");
-                permits.next().unwrap().send((*thread_ord_id, res_buf, stats));
+                permits.next().unwrap().send((*channel_id, res_buf, stats));
             }
         }
     }
@@ -468,20 +495,24 @@ fn spawn_connection(addr: SocketAddr, events_tx: tokio::sync::mpsc::Sender<Spark
         let decoder = PacketDecoder::from_socket(addr);
         info!("Connected to Sparkles at {addr}");
 
-        let events_tx2 = events_tx.clone();
         let mut thread_infos = HashMap::new();
+        let mut ext_channel_infos = HashMap::new();
         SparklesParser::new().parse_to_end(decoder, move |evt| {
             match evt {
-                SparklesParserEvent::ThreadParserEvent(ThreadParserEvent::NewEvents(evs), thread_info) => {
+                SparklesParserEvent::ThreadParserEvent(ThreadParserEvent::NewEvents(events), thread_info) => {
+                    let id = thread_info.thread_ord_id;
+
                     #[cfg(feature = "self-tracing")]
-                    let g = sparkles::range_event_start!("got new events");
+                    sparkles::instant_event!("got new events");
+
+                    // check/update thread name
                     if let Some(thread_name) = &thread_info.thread_name {
-                        let entry = thread_infos.entry(thread_info.thread_ord_id);
+                        let entry = thread_infos.entry(id);
                         match entry {
                             std::collections::hash_map::Entry::Vacant(e) => {
                                 e.insert(thread_name.clone());
-                                events_tx.blocking_send(SparklesConnectionMessage::UpdateThreadName {
-                                    thread_ord_id: thread_info.thread_ord_id,
+                                events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
+                                    channel_id: ChannelId::Thread(id),
                                     thread_name: thread_name.clone(),
                                 }).unwrap();
                             },
@@ -489,30 +520,70 @@ fn spawn_connection(addr: SocketAddr, events_tx: tokio::sync::mpsc::Sender<Spark
                                 let existing_thread_name = e.get_mut();
                                 if existing_thread_name != thread_name {
                                     *existing_thread_name = thread_name.clone();
-                                    events_tx.blocking_send(SparklesConnectionMessage::UpdateThreadName {
-                                        thread_ord_id: thread_info.thread_ord_id,
+                                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
+                                        channel_id: ChannelId::Thread(id),
                                         thread_name: thread_name.clone(),
                                     }).unwrap();
                                 }
                             }
                         }
                     }
-                    #[cfg(feature = "self-tracing")]
-                    drop(g);
+
+
+                    // send new events
                     events_tx.blocking_send(SparklesConnectionMessage::Events {
                         thread_ord_id: thread_info.thread_ord_id,
-                        events: evs.to_vec(),
+                        events,
+                    }).unwrap();
+                }
+                SparklesParserEvent::ExternalParserEvent(ExternalParserEvent::NewEvents(events), info) => {
+                    let id = info.ext_ord_id;
+
+                    // check/update channel name
+                    if let Some(name) = info.channel_name.clone() {
+                        let entry = ext_channel_infos.entry(id);
+
+                        match entry {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(name.clone());
+                                events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
+                                    channel_id: ChannelId::External(id),
+                                    thread_name: name.to_string(),
+                                }).unwrap();
+                            },
+                            std::collections::hash_map::Entry::Occupied(mut e) => {
+                                let existing_name = e.get_mut();
+                                if existing_name.as_ref() != name.as_ref() {
+                                    *existing_name = name.clone();
+                                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
+                                        channel_id: ChannelId::External(id),
+                                        thread_name: name.to_string(),
+                                    }).unwrap();
+                                }
+                            }
+                        }
+                    }
+
+                    // send event names
+                    events_tx.blocking_send(SparklesConnectionMessage::ExternalEvents {
+                        ext_ord_id: id,
+                        events,
                     }).unwrap();
                 }
                 SparklesParserEvent::ThreadParserEvent(ThreadParserEvent::EventNamesChanged(new_event_names), thread_info) => {
-                    events_tx2.blocking_send(SparklesConnectionMessage::UpdateEventNames {
-                        thread_ord_id: thread_info.thread_ord_id,
-                        event_names: new_event_names.iter().map(|(id, (name, _))| {
-                            (*id, Arc::from(&**name))
-                        }).collect()
+                    let id = thread_info.thread_ord_id;
+                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelEventNames {
+                        channel_id: ChannelId::Thread(id),
+                        event_names: new_event_names.into_iter().map(|(k, v)| (k as GeneralEventNameId, v.0)).collect(),
                     }).unwrap();
                 }
-                _ => {}
+                SparklesParserEvent::ExternalParserEvent(ExternalParserEvent::NewEventNames(new_event_names), info) => {
+                    let id = info.ext_ord_id;
+                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelEventNames {
+                        channel_id: ChannelId::External(id),
+                        event_names: new_event_names.into_iter().map(|(k, v)| (k as GeneralEventNameId, v)).collect(),
+                    }).unwrap();
+                }
             }
         }).unwrap();
     }).unwrap();
@@ -523,14 +594,33 @@ pub enum SparklesConnectionMessage {
         thread_ord_id: u64,
         events: Vec<ParsedEvent>,
     },
-    UpdateThreadName {
-        thread_ord_id: u64,
+    ExternalEvents {
+        ext_ord_id: u32,
+        events: Vec<ParsedExternalEvent>
+    },
+    UpdateChannelName {
+        channel_id: ChannelId,
         thread_name: String,
     },
-    UpdateEventNames {
-        thread_ord_id: u64,
-        event_names: HashMap<TracingEventId, Arc<str>>
+    UpdateChannelEventNames {
+        channel_id: ChannelId,
+        event_names: GeneralEventNamesStore
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ChannelId {
+    Thread(u64),
+    External(u32),
+}
+
+impl ChannelId {
+    pub fn general_id(&self) -> u64 {
+        match self {
+            ChannelId::Thread(id) => *id,
+            ChannelId::External(id) => *id as u64 + u64::MAX >> 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

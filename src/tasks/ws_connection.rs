@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use log::{error, info, warn};
-use sparkles_parser::TracingEventId;
+use sparkles_parser::EventNameId;
 use tokio::time::interval;
 use crate::shared::WsConnection;
-use crate::tasks::sparkles_connection::EventsSkipStats;
-use crate::tasks::sparkles_connection::storage::StorageStats;
+use crate::tasks::sparkles_connection::{ChannelId, EventsSkipStats};
+use crate::tasks::sparkles_connection::storage::{GeneralEventNameId, StorageStats};
 use crate::tasks::web_server::DiscoveryShared;
 
 pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, mut conn: WsConnection) -> anyhow::Result<()> {
@@ -65,10 +65,10 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                                                 is_channel_registered = true;
                                             }
                                         }
-                                        MessageToServer::SetThreadName { conn_id, thread_id, name } => {
-                                            match conn.set_thread_name(conn_id, thread_id, name.clone()).await {
+                                        MessageToServer::SetChannelId { conn_id, channel_id, name } => {
+                                            match conn.set_thread_name(conn_id, channel_id, name.clone()).await {
                                                 Ok(_) => {
-                                                    info!("Thread name set for connection {}, thread {}: {}", conn_id, thread_id, name);
+                                                    info!("Thread name set for connection {}, channel {:?}: {}", conn_id, channel_id, name);
                                                 }
                                                 Err(e) => {
                                                     warn!("Failed to set thread name: {}", e);
@@ -114,12 +114,12 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
 
                 for (id, addr, online) in clients {
                     let stats = conn.get_storage_stats(id).await.unwrap_or_default();
-                    let thread_names = conn.get_thread_names(id).await.unwrap_or_default();
+                    let channel_names = conn.get_channel_names(id).await.unwrap_or_default();
                     
                     let mut event_names = HashMap::new();
-                    for (&thread_id, _) in &thread_names {
+                    for (&thread_id, _) in &channel_names {
                         if let Ok(names) = conn.get_event_names(id, thread_id).await {
-                            let string_names: HashMap<TracingEventId, String> = names
+                            let string_names: HashMap<GeneralEventNameId, String> = names
                                 .into_iter()
                                 .map(|(k, v)| (k, v.to_string()))
                                 .collect();
@@ -131,7 +131,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                         id,
                         addr,
                         stats,
-                        thread_names,
+                        channel_names,
                         event_names,
                         online,
                     })
@@ -153,12 +153,12 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
             }
             res = event_data_rx_channel.recv() => {
                 match res {
-                    Some((thread_ord_id, mut data, stats)) => {
+                    Some((channel_id, mut data, stats)) => {
                         let msg_id = last_msg_id;
                         last_msg_id += 1;
 
                         let msg = MessageFromServer::addressed(current_sparkles_id, AddressedMessageFromServer::NewEventsHeader {
-                            thread_ord_id,
+                            channel_id,
                             msg_id,
                             stats
                         });
@@ -204,9 +204,9 @@ pub enum MessageToServer {
         start: u64,
         end: u64,
     },
-    SetThreadName {
+    SetChannelId {
         conn_id: u32,
-        thread_id: u64,
+        channel_id: ChannelId,
         name: String,
     },
 }
@@ -216,8 +216,8 @@ pub struct ActiveConnectionInfo {
     id: u32,
     addr: SocketAddr,
     stats: StorageStats,
-    thread_names: HashMap<u64, String>,
-    event_names: HashMap<u64, HashMap<TracingEventId, String>>,
+    channel_names: HashMap<ChannelId, String>,
+    event_names: HashMap<ChannelId, HashMap<GeneralEventNameId, String>>,
     online: bool,
 }
 #[derive(Debug, Clone, serde::Serialize)]
@@ -247,7 +247,7 @@ impl MessageFromServer {
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum AddressedMessageFromServer {
     NewEventsHeader {
-        thread_ord_id: u64,
+        channel_id: ChannelId,
         msg_id: u32,
         stats: EventsSkipStats
     },

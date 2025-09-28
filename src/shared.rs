@@ -3,10 +3,10 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 use parking_lot::Mutex;
-use sparkles_parser::TracingEventId;
+use sparkles_parser::EventNameId;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use crate::tasks::sparkles_connection::EventsSkipStats;
-use crate::tasks::sparkles_connection::storage::StorageStats;
+use crate::tasks::sparkles_connection::{ChannelId, EventsSkipStats};
+use crate::tasks::sparkles_connection::storage::{GeneralEventNameId, StorageStats};
 
 #[derive(Clone)]
 pub struct SparklesWebsocketShared {
@@ -160,23 +160,23 @@ impl WsConnection {
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn get_thread_names(&mut self, id: u32) -> anyhow::Result<HashMap<u64, String>> {
+    pub async fn get_channel_names(&mut self, id: u32) -> anyhow::Result<HashMap<ChannelId, String>> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let msg = WsToSparklesMessage::GetThreadNames { resp: sender };
+        let msg = WsToSparklesMessage::GetChannelNames { resp: sender };
         self.send_message(id, msg)?;
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn set_thread_name(&mut self, id: u32, thread_id: u64, name: String) -> anyhow::Result<()> {
+    pub async fn set_thread_name(&mut self, id: u32, channel_id: ChannelId, name: String) -> anyhow::Result<()> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let msg = WsToSparklesMessage::SetThreadName { thread_id, name, resp: sender };
+        let msg = WsToSparklesMessage::SetChannelName { channel_id, name, resp: sender };
         self.send_message(id, msg)?;
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn get_event_names(&mut self, id: u32, thread_id: u64) -> anyhow::Result<HashMap<TracingEventId, Arc<str>>> {
+    pub async fn get_event_names(&mut self, id: u32, channel_id: ChannelId) -> anyhow::Result<HashMap<GeneralEventNameId, Arc<str>>> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let msg = WsToSparklesMessage::GetEventNames { thread_id, resp: sender };
+        let msg = WsToSparklesMessage::GetEventNames { channel_id, resp: sender };
         self.send_message(id, msg)?;
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
@@ -195,7 +195,7 @@ impl WsConnection {
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn request_new_events(&mut self, id: u32, start: u64, end: u64) -> anyhow::Result<tokio::sync::mpsc::Receiver<(u64, Vec<u8>, EventsSkipStats)>> {
+    pub async fn request_new_events(&mut self, id: u32, start: u64, end: u64) -> anyhow::Result<tokio::sync::mpsc::Receiver<(ChannelId, Vec<u8>, EventsSkipStats)>> {
         let (sender, receiver) = tokio::sync::mpsc::channel(100_000);
         let msg = WsToSparklesMessage::RequestNewRange { start, end, events_channel: sender };
         self.send_message(id, msg)?;
@@ -277,22 +277,22 @@ pub enum SparklesToWsMessage {
 
 #[derive(Debug)]
 pub enum WsToSparklesMessage {
-    GetThreadNames {
-        resp: tokio::sync::oneshot::Sender<HashMap<u64, String>>,
+    GetChannelNames {
+        resp: tokio::sync::oneshot::Sender<HashMap<ChannelId, String>>,
     },
-    SetThreadName {
-        thread_id: u64,
+    SetChannelName {
+        channel_id: ChannelId,
         name: String,
         resp: tokio::sync::oneshot::Sender<()>,
     },
     GetEventNames {
-        thread_id: u64,
-        resp: tokio::sync::oneshot::Sender<HashMap<TracingEventId, Arc<str>>>,
+        channel_id: ChannelId,
+        resp: tokio::sync::oneshot::Sender<HashMap<GeneralEventNameId, Arc<str>>>,
     },
     RequestNewRange {
         start: u64,
         end: u64,
-        events_channel: tokio::sync::mpsc::Sender<(u64, Vec<u8>, EventsSkipStats)>,
+        events_channel: tokio::sync::mpsc::Sender<(ChannelId, Vec<u8>, EventsSkipStats)>,
     },
     GetConnectionTimestamps {
         resp: tokio::sync::oneshot::Sender<Option<(u64, u64, u64)>>,

@@ -124,16 +124,16 @@ class WebSocketStore {
               // If connection was already online, preserve user's scrolling choice
               
               // Apply thread names from server
-              if (connectionInfo.thread_names) {
-                for (const [threadId, threadName] of Object.entries(connectionInfo.thread_names)) {
-                  connection.setThreadName(parseInt(threadId), threadName);
+              if (connectionInfo.channel_names) {
+                for (const [channelId, channelName] of Object.entries(connectionInfo.channel_names)) {
+                  connection.setChannelName(parseInt(channelId), channelName);
                 }
               }
               
               // Apply event names from server
               if (connectionInfo.event_names) {
-                for (const [threadId, eventNamesObj] of Object.entries(connectionInfo.event_names)) {
-                  connection.setThreadEventNames(parseInt(threadId), eventNamesObj);
+                for (const [channelId, channelNamesObj] of Object.entries(connectionInfo.event_names)) {
+                  connection.setThreadEventNames(parseInt(channelId), channelNamesObj);
                 }
               }
             }
@@ -228,12 +228,12 @@ class WebSocketStore {
     this.getConnection(connectionId)?.resetViewToData();
   };
 
-  setThreadName = (connectionId, threadId, name) => {
-    console.log(`Setting thread name for connection ${connectionId}, thread ${threadId}: ${name}`);
+  setChannelName = (connectionId, channelId, name) => {
+    console.log(`Setting channel name for connection ${connectionId}, channel ${channelId}: ${name}`);
     this.sendMessage(JSON.stringify({
-      "SetThreadName": {
+      "SetChannelName": {
         "conn_id": connectionId,
-        "thread_id": threadId,
+        "channel_id": channelId,
         "name": name
       }
     }));

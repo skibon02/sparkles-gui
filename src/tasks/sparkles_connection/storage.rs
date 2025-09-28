@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::iter::Sum;
 use std::ops::Add;
 use std::sync::Arc;
@@ -6,16 +6,40 @@ use std::time::Instant;
 use serde::Serialize;
 use slab::Slab;
 use smallvec::SmallVec;
-use sparkles_parser::TracingEventId;
+use sparkles_parser::parser::thread_parser::EventNamesStore;
 use tokio::sync::mpsc::Receiver;
-use crate::tasks::sparkles_connection::SparklesConnectionMessage;
+use crate::tasks::sparkles_connection::{ChannelId, SparklesConnectionMessage};
+
+pub type GeneralEventNameId = u16;
+pub type GeneralEventNamesStore = HashMap<GeneralEventNameId, Arc<str>>;
 
 pub struct ClientStorage {
-    pub thread_events: HashMap<u64, EventStorage>,
-    pub thread_names: HashMap<u64, String>,
+    pub channel_events: HashMap<ChannelId, ChannelEventsStorage>,
+    pub channel_names: HashMap<ChannelId, String>,
     pub msg_rx: Receiver<SparklesConnectionMessage>,
 
     pub conn_timestamps: Option<ConnectionTimestamps>,
+}
+
+impl ClientStorage {
+    pub fn update_conn_timestamps(&mut self, min_tm: Option<u64>, max_tm: Option<u64>) {
+        if let Some(min) = min_tm && let Some(max) = max_tm {
+            let now = Instant::now();
+            let last_event_tm = max;
+
+            if let Some(conn_ts) = &mut self.conn_timestamps {
+                conn_ts.last_sync = (now, last_event_tm);
+                conn_ts.min_tm = conn_ts.min_tm.min(min);
+                conn_ts.max_tm = conn_ts.max_tm.max(max);
+            } else {
+                self.conn_timestamps = Some(ConnectionTimestamps {
+                    last_sync: (now, last_event_tm),
+                    min_tm: min,
+                    max_tm: max,
+                });
+            }
+        }
+    }
 }
 
 pub struct ConnectionTimestamps {
@@ -26,7 +50,7 @@ pub struct ConnectionTimestamps {
 impl ClientStorage {
     pub fn get_storage_stats(&self) -> StorageStats {
         let mut res = StorageStats::default();
-        for storage in self.thread_events.values() {
+        for storage in self.channel_events.values() {
             res.instant_events += storage.instant_events.len();
             res.range_events += storage.range_events.len() + storage.cross_thread_range_events.len();
         }
@@ -37,8 +61,8 @@ impl ClientStorage {
 impl ClientStorage {
     pub fn new(msg_rx: Receiver<SparklesConnectionMessage>) -> Self {
         Self {
-            thread_events: HashMap::new(),
-            thread_names: HashMap::new(),
+            channel_events: HashMap::new(),
+            channel_names: HashMap::new(),
             conn_timestamps: None,
             msg_rx,
         }
@@ -46,12 +70,12 @@ impl ClientStorage {
 }
 #[derive(Default)]
 pub struct RangeEventStorage<T = ()> {
-    events: Slab<(u64, TracingEventId, Option<TracingEventId>, T)>,
+    events: Slab<(u64, GeneralEventNameId, Option<GeneralEventNameId>, T)>,
     starts_index: BTreeMap<u64, SmallVec<[usize; 2]>>,
 }
 
 impl<T: Copy> RangeEventStorage<T> {
-    pub fn insert(&mut self, start: u64, end: u64, name_id: TracingEventId, end_name_id: Option<TracingEventId>, extra: T) -> usize {
+    pub fn insert(&mut self, start: u64, end: u64, name_id: GeneralEventNameId, end_name_id: Option<GeneralEventNameId>, extra: T) -> usize {
         let id = self.events.insert((end, name_id, end_name_id, extra));
         match self.starts_index.entry(start) {
             std::collections::btree_map::Entry::Vacant(entry) => {
@@ -70,7 +94,7 @@ impl<T: Copy> RangeEventStorage<T> {
         self.events.len()
     }
 
-    pub fn request_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>, T)> + '_ {
+    pub fn request_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>, T)> + '_ {
         self.starts_index.range(..end).flat_map(move |(start_time, ids)| {
             ids.iter().filter_map(move |&id| {
                 let (end_time, name_id, end_name_id, extra) = self.events.get(id)?;
@@ -85,39 +109,101 @@ impl<T: Copy> RangeEventStorage<T> {
 }
 
 impl RangeEventStorage<()> {
-    pub fn insert_simple(&mut self, start: u64, end: u64, name_id: TracingEventId, end_name_id: Option<TracingEventId>) -> usize {
+    pub fn insert_simple(&mut self, start: u64, end: u64, name_id: GeneralEventNameId, end_name_id: Option<GeneralEventNameId>) -> usize {
         self.insert(start, end, name_id, end_name_id, ())
     }
 
-    pub fn request_events_simple(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>)> + '_ {
+    pub fn request_events_simple(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>)> + '_ {
         self.request_events(start, end).map(|(start_time, end_time, name_id, end_name_id, _)| (start_time, end_time, name_id, end_name_id))
     }
 }
 
-#[derive(Default)]
-pub struct EventStorage {
-    pub(crate) event_names: HashMap<TracingEventId, Arc<str>>,
-
-    pub(crate) instant_events: BTreeMap<u64, TracingEventId>,
-    
-    pub(crate) range_events: RangeEventStorage<()>,
-
-    pub(crate) cross_thread_range_events: RangeEventStorage<u64>,
+/// Instant event ordered by timestamp
+#[derive(Copy, Clone, Debug)]
+pub struct StoredInstantEvent {
+    pub tm: u64,
+    pub name_id: GeneralEventNameId,
 }
 
-impl EventStorage {
-    /// Events are guaranteed to be in order of timestamp
-    pub fn request_instant_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, TracingEventId)> + '_ {
-        self.instant_events.range(start..end).map(|(tm, name_id)| (*tm, *name_id))
+impl StoredInstantEvent {
+    pub fn new(tm: u64, name_id: GeneralEventNameId) -> Self {
+        Self { tm, name_id }
+    }
+}
+
+impl PartialEq for StoredInstantEvent {
+    fn eq(&self, other: &Self) -> bool {
+        self.tm == other.tm
+    }
+}
+impl Eq for StoredInstantEvent {}
+impl PartialOrd for StoredInstantEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.tm.cmp(&other.tm))
+    }
+}
+impl Ord for StoredInstantEvent {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.tm.cmp(&other.tm)
+    }
+}
+
+#[derive(Default)]
+pub struct ChannelEventsStorage {
+    event_names: GeneralEventNamesStore,
+    instant_events: VecDeque<StoredInstantEvent>,
+    range_events: RangeEventStorage<()>,
+    cross_thread_range_events: RangeEventStorage<u64>,
+}
+
+impl ChannelEventsStorage {
+    pub fn update_event_names(&mut self, names: GeneralEventNamesStore) {
+        self.event_names = names;
+    }
+
+    pub fn event_names(&self) -> HashMap<GeneralEventNameId, Arc<str>> {
+        self.event_names.clone()
+    }
+
+    /// Insert a new instant event
+    pub fn insert_instant_event(&mut self, tm: u64, name_id: GeneralEventNameId) {
+        let event = StoredInstantEvent::new(tm, name_id);
+        match self.instant_events.back() {
+            Some(last) if *last <= event => {
+                // Fast path: append to the end
+                self.instant_events.push_back(event);
+            }
+            _ => {
+                // Slow path: insert in sorted order
+                let pos = self.instant_events.partition_point(|e| *e < event);
+                self.instant_events.insert(pos, event);
+            }
+        }
+    }
+
+    /// Request events in range [start, end)
+    pub fn request_instant_events(&self, start: u64, end: u64) -> impl Iterator<Item = StoredInstantEvent> + '_ {
+        let start = self.instant_events.partition_point(|e| e.tm < start);
+        let end = self.instant_events.partition_point(|e| e.tm < end);
+        self.instant_events.iter().skip(start).take(end - start).copied()
+    }
+
+    /// Insert a new range event. If `start_thread_id` is Some, it is treated as a cross-thread event
+    pub fn insert_range_event(&mut self, start: u64, end: u64, name_id: GeneralEventNameId, end_name_id: Option<GeneralEventNameId>, start_thread_id: Option<u64>) -> usize {
+        if let Some(start_thread_id) = start_thread_id {
+            self.cross_thread_range_events.insert(start, end, name_id, end_name_id, start_thread_id)
+        } else {
+            self.range_events.insert_simple(start, end, name_id, end_name_id)
+        }
     }
 
     /// Events are guaranteed to be in order of start time
-    pub fn request_range_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>)> + '_ {
+    pub fn request_range_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>)> + '_ {
         self.range_events.request_events_simple(start, end)
     }
 
     /// Events are guaranteed to be in order of start time
-    pub fn request_cross_thread_range_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, TracingEventId, Option<TracingEventId>, u64)> + '_ {
+    pub fn request_cross_thread_range_events(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, u64, GeneralEventNameId, Option<GeneralEventNameId>, u64)> + '_ {
         self.cross_thread_range_events.request_events(start, end)
     }
 }
