@@ -3,8 +3,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
-use log::{error, info, warn};
-use sparkles_parser::EventNameId;
+use log::{debug, error, info, warn};
 use tokio::time::interval;
 use crate::shared::WsConnection;
 use crate::tasks::sparkles_connection::{ChannelId, EventsSkipStats};
@@ -59,7 +58,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                                             else {
                                                 let resp_rx = conn.request_new_events(conn_id, start, end).await?;
 
-                                                info!("Channel registered!");
+                                                debug!("Channel registered!");
                                                 event_data_rx_channel = resp_rx;
                                                 current_sparkles_id = conn_id;
                                                 is_channel_registered = true;
@@ -114,19 +113,26 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
 
                 for (id, addr, online) in clients {
                     let stats = conn.get_storage_stats(id).await.unwrap_or_default();
-                    let channel_names = conn.get_channel_names(id).await.unwrap_or_default();
-                    
+                    let channel_names_raw = conn.get_channel_names(id).await.unwrap_or_default();
+
+                    // Convert ChannelId keys to strings for JSON serialization
+                    let channel_names: HashMap<String, String> = channel_names_raw
+                        .iter()
+                        .map(|(channel_id, name)| (serde_json::to_string(channel_id).unwrap(), name.clone()))
+                        .collect();
+
                     let mut event_names = HashMap::new();
-                    for (&thread_id, _) in &channel_names {
+                    for (&thread_id, _) in &channel_names_raw {
                         if let Ok(names) = conn.get_event_names(id, thread_id).await {
                             let string_names: HashMap<GeneralEventNameId, String> = names
                                 .into_iter()
                                 .map(|(k, v)| (k, v.to_string()))
                                 .collect();
-                            event_names.insert(thread_id, string_names);
+                            let channel_key = serde_json::to_string(&thread_id).unwrap();
+                            event_names.insert(channel_key, string_names);
                         }
                     }
-                    
+
                     conns.push(ActiveConnectionInfo {
                         id,
                         addr,
@@ -175,7 +181,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                         let (new_dummy_tx, new_dummy_rx) = tokio::sync::mpsc::channel(1);
                         dummy_tx = new_dummy_tx;
                         event_data_rx_channel = new_dummy_rx;
-                        info!("Channel unregistered!");
+                        debug!("Channel unregistered!");
                     }
                 }
             }
@@ -184,13 +190,19 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
 }
 
 async fn send_websocket(socket: &mut WebSocket, msg: MessageFromServer) -> anyhow::Result<()> {
-    let json = serde_json::to_string(&msg)?;
-    socket.send(Message::Text(Utf8Bytes::from(json))).await?;
+    let json = serde_json::to_string(&msg).inspect_err(|e| {
+        error!("Failed to serialize websocket message: {e}");
+    })?;
+    socket.send(Message::Text(Utf8Bytes::from(json))).await.inspect_err(|e| {
+        error!("Failed to send websocket message: {e}");
+    })?;
     Ok(())
 }
 
 async fn send_websocket_bytes(socket: &mut WebSocket, bytes: Bytes) -> anyhow::Result<()> {
-    socket.send(Message::Binary(bytes)).await?;
+    socket.send(Message::Binary(bytes)).await.inspect_err(|e| {
+        error!("Failed to send websocket binary message: {e}");
+    })?;
     Ok(())
 }
 
@@ -216,8 +228,8 @@ pub struct ActiveConnectionInfo {
     id: u32,
     addr: SocketAddr,
     stats: StorageStats,
-    channel_names: HashMap<ChannelId, String>,
-    event_names: HashMap<ChannelId, HashMap<GeneralEventNameId, String>>,
+    channel_names: HashMap<String, String>,
+    event_names: HashMap<String, HashMap<GeneralEventNameId, String>>,
     online: bool,
 }
 #[derive(Debug, Clone, serde::Serialize)]

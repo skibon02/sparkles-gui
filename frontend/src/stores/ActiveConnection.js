@@ -175,15 +175,13 @@ class ActiveConnection {
     // Don't execute pending request immediately, let user trigger it
   }
 
-  // Per-thread canvas management
-  setCanvasRef(thread_ord_id, canvas) {
-    this.threadStore.setThreadCanvasRef(thread_ord_id, canvas);
-    if (canvas) {
-    }
+  // Per-channel canvas management
+  setCanvasRef(channelId, canvas) {
+    this.threadStore.setThreadCanvasRef(channelId, canvas);
   }
-  removeCanvasRef(thread_ord_id) {
-    this.threadStore.removeThreadCanvasRef(thread_ord_id);
-    console.log(`Canvas reference removed for connection ${this.id}, thread ${thread_ord_id}`);
+  removeCanvasRef(channelId) {
+    this.threadStore.removeThreadCanvasRef(channelId);
+    console.log(`Canvas reference removed for connection ${this.id}, channel ${JSON.stringify(channelId)}`);
   }
   // Container event setup (will be called from React component)
   setupContainerEvents(container) {
@@ -397,11 +395,11 @@ class ActiveConnection {
 
 
 
-  handleNewEvents = (thread_ord_id, view, stats) => {
+  handleNewEvents = (channelId, view, stats) => {
     let s = trace.start();
 
-    // Store skip stats for this thread
-    this.threadStore.setThreadSkipStats(thread_ord_id, stats);
+    // Store skip stats for this channel
+    this.threadStore.setThreadSkipStats(channelId, stats);
     
     let offset = 0;
 
@@ -416,8 +414,8 @@ class ActiveConnection {
     while (offset < instantEventsEnd) {
       const tm = Number(view.getBigUint64(offset, true));
       offset += 8;
-      const eventId = view.getUint8(offset);
-      offset += 1;
+      const eventId = view.getUint16(offset, true);
+      offset += 2;
       const yPos = view.getUint8(offset);
       offset += 1;
 
@@ -439,10 +437,10 @@ class ActiveConnection {
       offset += 8;
       const end = Number(view.getBigUint64(offset, true));
       offset += 8;
-      const start_id = view.getUint8(offset);
-      offset += 1;
-      const end_id = view.getUint8(offset);
-      offset += 1;
+      const start_id = view.getUint16(offset, true);
+      offset += 2;
+      const end_id = view.getUint16(offset, true);
+      offset += 2;
       const yPos = view.getUint8(offset);
       offset += 1;
 
@@ -467,10 +465,10 @@ class ActiveConnection {
       offset += 8;
       const end = Number(view.getBigUint64(offset, true));
       offset += 8;
-      const start_id = view.getUint8(offset);
-      offset += 1;
-      const end_id = view.getUint8(offset);
-      offset += 1;
+      const start_id = view.getUint16(offset, true);
+      offset += 2;
+      const end_id = view.getUint16(offset, true);
+      offset += 2;
       const yPos = view.getUint8(offset);
       offset += 1;
       const thread_id = Number(view.getBigUint64(offset, true));
@@ -491,18 +489,18 @@ class ActiveConnection {
     trace.end(s, "parse raw events")
 
     // Update OpenGL buffers directly
-    this.updateCanvasData(thread_ord_id, instantEvents, rangeEvents);
+    this.updateCanvasData(channelId, instantEvents, rangeEvents);
 
     // Notify connection that request is complete (for throttling)
     this.onEventRequestComplete();
   };
 
 
-  updateCanvasData(thread_ord_id, instantEvents, rangeEvents) {
-    // Update buffers for this specific thread
-    this.updateThreadBuffers(thread_ord_id, instantEvents, rangeEvents);
+  updateCanvasData(channelId, instantEvents, rangeEvents) {
+    // Update buffers for this specific channel
+    this.updateThreadBuffers(channelId, instantEvents, rangeEvents);
   }
-  updateThreadBuffers(thread_ord_id, instantEvents, rangeEvents) {
+  updateThreadBuffers(channelId, instantEvents, rangeEvents) {
     if (!this.timestamps) return;
     let s = trace.start();
 
@@ -510,8 +508,8 @@ class ActiveConnection {
     const rangeEventCount = rangeEvents.length;
 
     if (instantEventCount === 0 && rangeEventCount === 0) {
-      // Keep thread but mark as having 0 events (don't delete to avoid race conditions)
-      const thread = this.threadStore.getOrCreateThread(thread_ord_id);
+      // Keep channel but mark as having 0 events (don't delete to avoid race conditions)
+      const thread = this.threadStore.getOrCreateThread(channelId);
       thread.instantCount = 0;
       thread.rangeCount = 0;
       thread.maxYPosition = 0;
@@ -555,7 +553,7 @@ class ActiveConnection {
       instantColors[i * 3 + 2] = b; // B
       
       // Store color mapping for cursor feedback using original integer values
-      const thread = this.threadStore.getOrCreateThread(thread_ord_id);
+      const thread = this.threadStore.getOrCreateThread(channelId);
       thread.addColorMapping(event.event_id, rgb[0], rgb[1], rgb[2]);
     }
 
@@ -595,7 +593,7 @@ class ActiveConnection {
       rangeColors[i * 3 + 2] = b; // B
       
       // Store color mapping for cursor feedback using original integer values (use start and end event IDs)
-      const thread = this.threadStore.getOrCreateThread(thread_ord_id);
+      const thread = this.threadStore.getOrCreateThread(channelId);
       
       // For cross-thread events, we need to resolve the start event name from the starting thread
       if (event.is_cross_thread && event.thread_id !== undefined) {
@@ -612,55 +610,55 @@ class ActiveConnection {
       }
     }
 
-    // Update buffers for this thread
-    this.threadStore.updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantEventCount, rangePositions, rangeColors, rangeEventCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags);
+    // Update buffers for this channel
+    this.threadStore.updateThreadBuffers(channelId, instantPositions, instantColors, instantEventCount, rangePositions, rangeColors, rangeEventCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags);
 
     trace.end(s, "updateThreadBuffers")
   }
-  // Getter for thread skip stats
-  getThreadSkipStats(thread_ord_id) {
-    return this.threadStore.getThreadSkipStats(thread_ord_id);
+  // Getter for channel skip stats
+  getThreadSkipStats(channelId) {
+    return this.threadStore.getThreadSkipStats(channelId);
   }
 
-  // Get all thread skip stats
+  // Get all channel skip stats
   getAllThreadSkipStats() {
     return this.threadStore.getAllThreadSkipStats();
   }
 
-  // Get all threads
+  // Get all channels
   getAllThreads() {
     return this.threadStore.getAllThreads();
   }
 
-  // Per-thread canvas management methods (delegate to threadStore)
-  setThreadCanvasRef(thread_ord_id, canvas) {
-    this.threadStore.setThreadCanvasRef(thread_ord_id, canvas);
+  // Per-channel canvas management methods (delegate to threadStore)
+  setThreadCanvasRef(channelId, canvas) {
+    this.threadStore.setThreadCanvasRef(channelId, canvas);
   }
 
-  getThreadCanvasRef(thread_ord_id) {
-    return this.threadStore.getThreadCanvasRef(thread_ord_id);
+  getThreadCanvasRef(channelId) {
+    return this.threadStore.getThreadCanvasRef(channelId);
   }
 
-  removeThreadCanvasRef(thread_ord_id) {
-    this.threadStore.removeThreadCanvasRef(thread_ord_id);
+  removeThreadCanvasRef(channelId) {
+    this.threadStore.removeThreadCanvasRef(channelId);
   }
   
-  // Thread name management
-  setThreadName(thread_ord_id, name) {
-    this.threadStore.setChannelName(thread_ord_id, name);
+  // Channel name management
+  setChannelName(channelId, name) {
+    this.threadStore.setChannelName(channelId, name);
   }
   
-  getThreadName(thread_ord_id) {
-    return this.threadStore.getThreadName(thread_ord_id);
+  getThreadName(channelId) {
+    return this.threadStore.getThreadName(channelId);
   }
   
   // Event names management
-  setThreadEventNames(thread_ord_id, eventNamesObj) {
-    this.threadStore.setThreadEventNames(thread_ord_id, eventNamesObj);
+  setThreadEventNames(channelId, eventNamesObj) {
+    this.threadStore.setThreadEventNames(channelId, eventNamesObj);
   }
   
-  getEventName(thread_ord_id, eventId) {
-    return this.threadStore.getEventName(thread_ord_id, eventId);
+  getEventName(channelId, eventId) {
+    return this.threadStore.getEventName(channelId, eventId);
   }
   
   // Control rendering based on expanded state

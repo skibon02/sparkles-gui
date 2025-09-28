@@ -1,7 +1,7 @@
 import {action, makeAutoObservable} from 'mobx';
 
 class ConnectionThread {
-  thread_ord_id = null;
+  channelId = null;
   connectionId = null;
   thread_name = '';
   
@@ -54,8 +54,8 @@ class ConnectionThread {
   // Pixel reading buffer for cursor feedback
   pixelBuffer = new Uint8Array(4);
 
-  constructor(thread_ord_id, connectionId) {
-    this.thread_ord_id = thread_ord_id;
+  constructor(channelId, connectionId) {
+    this.channelId = channelId;
     this.connectionId = connectionId;
     
     makeAutoObservable(this);
@@ -112,12 +112,12 @@ class ConnectionThread {
   }
   
   // Add color to event ID mapping
-  addColorMapping(eventId, r, g, b, endEventId = 255, startEventName = null) {
+  addColorMapping(eventId, r, g, b, endEventId = 65535, startEventName = null) {
     // Store integer color values (0-255) directly
     const colorKey = `${r},${g},${b}`;
     // Store either single event ID or object with start/end IDs
-    // 255 is the special value indicating no end event
-    if (endEventId !== 255 && endEventId !== eventId) {
+    // 65535 is the special value indicating no end event (u16::MAX)
+    if (endEventId !== 65535 && endEventId !== eventId) {
       this.colorToEventMap.set(colorKey, { 
         startId: eventId, 
         endId: endEventId, 
@@ -215,7 +215,7 @@ class ConnectionThread {
         b: this.pixelBuffer[2] / 255,
         a: this.pixelBuffer[3] / 255
       };
-    } catch (error) {
+    } catch {
       return { r: 0, g: 0, b: 0, a: 0 };
     }
   }
@@ -259,7 +259,7 @@ class ConnectionThread {
 
     this.gl = this.canvasRef.getContext('webgl2') || this.canvasRef.getContext('webgl');
     if (!this.gl) {
-      console.error(`WebGL not supported for thread ${this.thread_ord_id}`);
+      console.error(`WebGL not supported for channel ${JSON.stringify(this.channelId)}`);
       return;
     }
 
@@ -375,7 +375,7 @@ class ConnectionThread {
     this.gl.linkProgram(this.shaderProgram);
 
     if (!this.gl.getProgramParameter(this.shaderProgram, this.gl.LINK_STATUS)) {
-      console.error(`Shader program linking failed for thread ${this.thread_ord_id}:`, 
+      console.error(`Shader program linking failed for channel ${JSON.stringify(this.channelId)}:`, 
         this.gl.getProgramInfoLog(this.shaderProgram));
       return;
     }
@@ -389,7 +389,7 @@ class ConnectionThread {
     
     // Apply any pending buffer data
     if (this.pendingBufferData) {
-      console.log(`Thread ${this.thread_ord_id}: Applying pending buffer data`);
+      console.log(`Channel ${JSON.stringify(this.channelId)}: Applying pending buffer data`);
       this.updateBuffers(
         this.pendingBufferData.instantPositions, 
         this.pendingBufferData.instantColors, 
@@ -414,7 +414,7 @@ class ConnectionThread {
     this.gl.compileShader(shader);
 
     if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-      console.error(`Shader compilation failed for thread ${this.thread_ord_id}:`, 
+      console.error(`Shader compilation failed for channel ${JSON.stringify(this.channelId)}:`,
         this.gl.getShaderInfoLog(shader));
       this.gl.deleteShader(shader);
       return null;
@@ -783,7 +783,7 @@ class ConnectionThread {
 }
 
 class ConnectionThreadStore {
-  // Map<thread_ord_id, ConnectionThread>
+  // Map<ChannelId, ConnectionThread>
   channels = new Map();
   connectionId = null;
 
@@ -792,18 +792,20 @@ class ConnectionThreadStore {
     makeAutoObservable(this);
   }
 
-  // Get or create thread (similar to WebSocketStore pattern)
-  getOrCreateThread(thread_ord_id) {
-    if (!this.channels.has(thread_ord_id)) {
-      const thread = new ConnectionThread(thread_ord_id, this.connectionId);
-      this.channels.set(thread_ord_id, thread);
+  // Get or create channel (similar to WebSocketStore pattern)
+  getOrCreateThread(channelId) {
+    const channelKey = JSON.stringify(channelId);
+    if (!this.channels.has(channelKey)) {
+      const thread = new ConnectionThread(channelId, this.connectionId);
+      this.channels.set(channelKey, thread);
     }
-    return this.channels.get(thread_ord_id);
+    return this.channels.get(channelKey);
   }
 
-  // Get existing thread
-  getThread(thread_ord_id) {
-    return this.channels.get(thread_ord_id);
+  // Get existing channel
+  getThread(channelId) {
+    const channelKey = JSON.stringify(channelId);
+    return this.channels.get(channelKey);
   }
 
   // Get all threads
@@ -811,9 +813,9 @@ class ConnectionThreadStore {
     return Array.from(this.channels.values());
   }
 
-  // Get thread skip stats
-  getThreadSkipStats(thread_ord_id) {
-    const thread = this.getThread(thread_ord_id);
+  // Get channel skip stats
+  getThreadSkipStats(channelId) {
+    const thread = this.getThread(channelId);
     return thread ? thread.getSkipStats() : null;
   }
 
@@ -829,49 +831,49 @@ class ConnectionThreadStore {
     return stats;
   }
 
-  // Update thread skip stats
-  setThreadSkipStats(thread_ord_id, stats) {
-    const thread = this.getOrCreateThread(thread_ord_id);
+  // Update channel skip stats
+  setThreadSkipStats(channelId, stats) {
+    const thread = this.getOrCreateThread(channelId);
     thread.setSkipStats(stats);
   }
 
-  // Update thread buffers
-  updateThreadBuffers(thread_ord_id, instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags) {
-    const thread = this.getOrCreateThread(thread_ord_id);
+  // Update channel buffers
+  updateThreadBuffers(channelId, instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags) {
+    const thread = this.getOrCreateThread(channelId);
     thread.updateBuffers(instantPositions, instantColors, instantCount, rangePositions, rangeColors, rangeCount, instantYPositions, rangeYPositions, maxYPosition, rangeCrossThreadFlags);
   }
   
-  // Thread name management
-  setThreadName(thread_ord_id, name) {
-    const thread = this.getOrCreateThread(thread_ord_id);
-    thread.setChannelName(name);
+  // Channel name management
+  setChannelName(channelId, name) {
+    const thread = this.getOrCreateThread(channelId);
+    thread.setThreadName(name);
   }
   
-  getThreadName(thread_ord_id) {
-    const thread = this.getThread(thread_ord_id);
+  getThreadName(channelId) {
+    const thread = this.getThread(channelId);
     return thread ? thread.getThreadName() : '';
   }
   
   // Event names management
-  setThreadEventNames(thread_ord_id, eventNamesObj) {
-    const thread = this.getOrCreateThread(thread_ord_id);
+  setThreadEventNames(channelId, eventNamesObj) {
+    const thread = this.getOrCreateThread(channelId);
     thread.setEventNames(eventNamesObj);
   }
   
-  getEventName(thread_ord_id, eventId) {
-    const thread = this.getThread(thread_ord_id);
+  getEventName(channelId, eventId) {
+    const thread = this.getThread(channelId);
     return thread ? thread.getEventName(eventId) : `Event ${eventId}`;
   }
   
-  // Read pixel color from specific thread canvas
-  readPixelColor(thread_ord_id, canvasX, canvasY) {
-    const thread = this.getThread(thread_ord_id);
+  // Read pixel color from specific channel canvas
+  readPixelColor(channelId, canvasX, canvasY) {
+    const thread = this.getThread(channelId);
     return thread ? thread.readPixelColor(canvasX, canvasY) : { r: 0, g: 0, b: 0, a: 0 };
   }
   
-  // Get event name by color from specific thread
-  getEventNameByColor(thread_ord_id, r, g, b) {
-    const thread = this.getThread(thread_ord_id);
+  // Get event name by color from specific channel
+  getEventNameByColor(channelId, r, g, b) {
+    const thread = this.getThread(channelId);
     return thread ? thread.getEventNameByColor(r, g, b) : null;
   }
   
@@ -888,18 +890,18 @@ class ConnectionThreadStore {
   }
 
   // Canvas management methods (similar to WebSocketStore pattern)
-  setThreadCanvasRef(thread_ord_id, canvas) {
-    const thread = this.getOrCreateThread(thread_ord_id);
+  setThreadCanvasRef(channelId, canvas) {
+    const thread = this.getOrCreateThread(channelId);
     thread.setCanvasRef(canvas);
   }
 
-  getThreadCanvasRef(thread_ord_id) {
-    const thread = this.getThread(thread_ord_id);
+  getThreadCanvasRef(channelId) {
+    const thread = this.getThread(channelId);
     return thread ? thread.getCanvasRef() : null;
   }
 
-  removeThreadCanvasRef(thread_ord_id) {
-    const thread = this.getThread(thread_ord_id);
+  removeThreadCanvasRef(channelId) {
+    const thread = this.getThread(channelId);
     if (thread) {
       thread.removeCanvasRef();
     }

@@ -186,7 +186,7 @@ where
             if let Some(end_id) = end_id {
                 range_buf.extend_from_slice(&end_id.to_le_bytes());
             } else {
-                range_buf.push(255);
+                range_buf.extend_from_slice(&u16::MAX.to_le_bytes());
             }
             range_buf.push(y_pos);
             
@@ -226,7 +226,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                             start,
                             end,
                         });
-                        info!("Connection manager: added new range request for start: {start}, end: {end}");
+                        debug!("Connection manager: added new range request for start: {start}, end: {end}");
                     }
                     WsToSparklesMessage::GetEventNames {
                         channel_id,

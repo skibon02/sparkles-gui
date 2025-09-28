@@ -165,26 +165,39 @@ const ActiveConnections = observer(({ store }) => {
                   const expanded = isExpanded(connection.id);
                   connectionObj.setExpanded(expanded);
                   
-                  const threads = connectionObj.getAllThreads().sort((a, b) => a.thread_ord_id - b.thread_ord_id);
-                  
-                  if (threads.length === 0) {
+                  const allChannels = connectionObj.getAllThreads();
+
+                  // Separate threads and external channels, sort each group
+                  const threads = allChannels
+                    .filter(channel => channel.channelId.Thread !== undefined)
+                    .sort((a, b) => a.channelId.Thread - b.channelId.Thread);
+
+                  const externalChannels = allChannels
+                    .filter(channel => channel.channelId.External !== undefined)
+                    .sort((a, b) => a.channelId.External - b.channelId.External);
+
+                  if (threads.length === 0 && externalChannels.length === 0) {
                     return (
                       <div className={"threads-cont"}>
                         <div className={"threads-header"}>
                           <div className={"thread-joint"}>⚫︎</div>
                           <div className={"thread-name"}>
-                            No threads available
+                            No channels available
                           </div>
                         </div>
                       </div>
                     );
                   }
-                  
+
+                  // Combine all channels in a single container, grouped by type
+                  const sortedChannels = [...threads, ...externalChannels];
+
                   return (
-                    <ThreadsContainer 
+                    <ThreadsContainer
                       store={store}
                       connectionId={connection.id}
-                      threads={threads}
+                      channels={sortedChannels}
+                      threadCount={threads.length}
                     />
                   );
                 })()}

@@ -164,6 +164,21 @@ $marker-text: #95d1cd;
     &:last-child {
         margin-bottom: 0;
     }
+
+    // External channel styling - light red theme
+    &.external-channel {
+        .threads-header {
+            border-bottom-color: #ff6b6b; // Light but high contrast red border
+        }
+
+        .thread-joint {
+            color: #ff6b6b; // Match the border color
+        }
+
+        .thread-name {
+            color: #ff6b6b; // Light but high contrast red text for channel name
+        }
+    }
 }
 
 .zoom-indicator {

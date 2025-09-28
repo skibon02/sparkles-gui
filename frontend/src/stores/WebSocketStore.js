@@ -1,6 +1,5 @@
 import { makeAutoObservable, action } from 'mobx';
 import ActiveConnection from './ActiveConnection.js';
-import trace from "../trace.js";
 
 class WebSocketStore {
   socket = null;
@@ -91,52 +90,68 @@ class WebSocketStore {
             alert('Connection error: ' + msg.ConnectError);
           }
         } else if (msg.ActiveConnections !== undefined) {
-          this.activeConnections = msg.ActiveConnections;
-          
-          // Update connection status and thread names from server data
-          for (const connectionInfo of msg.ActiveConnections) {
-            const connection = this.getOrCreateConnection(connectionInfo.id);
-            if (connection) {
-              const wasOnline = connection.isOnline;
-              
-              // Update online status
-              connection.isOnline = connectionInfo.online;
-              
-              // Handle offline connections - disable scrolling completely
-              if (!connection.isOnline) {
-                // Always disable scrolling for offline connections
-                connection.isScrollingEnabled = false;
-                connection.isLocked = true; // Reset to default locked state
-              } else if (!wasOnline) {
-                // Connection just came online - set initial scrolling state
-                // Enable scrolling only if no other online connection has it enabled
-                const otherOnlineConnections = msg.ActiveConnections.filter(c => c.online && c.id !== connectionInfo.id);
-                const hasOtherScrollingConnection = otherOnlineConnections.some(c => {
-                  const otherConn = this.getConnection(c.id);
-                  return otherConn && otherConn.isScrollingEnabled;
-                });
-                
-                if (!hasOtherScrollingConnection) {
-                  connection.isScrollingEnabled = true;
-                  connection.isLocked = true; // Default to locked
+          try {
+            this.activeConnections = msg.ActiveConnections;
+
+            // Update connection status and thread names from server data
+            for (const connectionInfo of msg.ActiveConnections) {
+              const connection = this.getOrCreateConnection(connectionInfo.id);
+              if (connection) {
+                const wasOnline = connection.isOnline;
+
+                // Update online status
+                connection.isOnline = connectionInfo.online;
+
+                // Handle offline connections - disable scrolling completely
+                if (!connection.isOnline) {
+                  // Always disable scrolling for offline connections
+                  connection.isScrollingEnabled = false;
+                  connection.isLocked = true; // Reset to default locked state
+                } else if (!wasOnline) {
+                  // Connection just came online - set initial scrolling state
+                  // Enable scrolling only if no other online connection has it enabled
+                  const otherOnlineConnections = msg.ActiveConnections.filter(c => c.online && c.id !== connectionInfo.id);
+                  const hasOtherScrollingConnection = otherOnlineConnections.some(c => {
+                    const otherConn = this.getConnection(c.id);
+                    return otherConn && otherConn.isScrollingEnabled;
+                  });
+
+                  if (!hasOtherScrollingConnection) {
+                    connection.isScrollingEnabled = true;
+                    connection.isLocked = true; // Default to locked
+                  }
                 }
-              }
-              // If connection was already online, preserve user's scrolling choice
-              
-              // Apply thread names from server
-              if (connectionInfo.channel_names) {
-                for (const [channelId, channelName] of Object.entries(connectionInfo.channel_names)) {
-                  connection.setChannelName(parseInt(channelId), channelName);
+                // If connection was already online, preserve user's scrolling choice
+
+                // Apply channel names from server
+                if (connectionInfo.channel_names) {
+                  for (const [channelKey, channelName] of Object.entries(connectionInfo.channel_names)) {
+                    try {
+                      // Parse the ChannelId from the backend format
+                      const channelId = JSON.parse(channelKey);
+                      connection.setChannelName(channelId, channelName);
+                    } catch (e) {
+                      console.error('Error parsing channel ID:', channelKey, e);
+                    }
+                  }
                 }
-              }
-              
-              // Apply event names from server
-              if (connectionInfo.event_names) {
-                for (const [channelId, channelNamesObj] of Object.entries(connectionInfo.event_names)) {
-                  connection.setThreadEventNames(parseInt(channelId), channelNamesObj);
+
+                // Apply event names from server
+                if (connectionInfo.event_names) {
+                  for (const [channelKey, channelNamesObj] of Object.entries(connectionInfo.event_names)) {
+                    try {
+                      // Parse the ChannelId from the backend format
+                      const channelId = JSON.parse(channelKey);
+                      connection.setThreadEventNames(channelId, channelNamesObj);
+                    } catch (e) {
+                      console.error('Error parsing channel ID for event names:', channelKey, e);
+                    }
+                  }
                 }
               }
             }
+          } catch (error) {
+            console.error('Error processing ActiveConnections message:', error);
           }
         } else if (msg.Addressed !== undefined) {
           const { id, message } = msg.Addressed;
@@ -163,7 +178,7 @@ class WebSocketStore {
         let eventsHeader = this.newEventsHeader;
         if (eventsHeader) {
           event.data.arrayBuffer().then(buffer => {
-            let thread_ord_id = eventsHeader.thread_ord_id;
+            let channelId = eventsHeader.channel_id;
             let id = eventsHeader.id;
             const view = new DataView(buffer);
             let msg_id = view.getUint32(view.byteLength - 4, true);
@@ -172,7 +187,7 @@ class WebSocketStore {
             }
             else {
               let conn = this.getOrCreateConnection(id)
-              conn.handleNewEvents(thread_ord_id, view, eventsHeader.stats)
+              conn.handleNewEvents(channelId, view, eventsHeader.stats)
             }
           })
           this.newEventsHeader = null;
@@ -215,13 +230,13 @@ class WebSocketStore {
     this.sendMessage(JSON.stringify({ "Connect": { "addr": addr } }));
   };
 
-  // Canvas ref methods - direct delegation to connection (now per-thread)
-  setCanvasRef = (connectionId, thread_ord_id, canvas) => {
-    this.getOrCreateConnection(connectionId).setCanvasRef(thread_ord_id, canvas);
+  // Canvas ref methods - direct delegation to connection (now per-channel)
+  setCanvasRef = (connectionId, channelId, canvas) => {
+    this.getOrCreateConnection(connectionId).setCanvasRef(channelId, canvas);
   };
 
-  removeCanvasRef = (connectionId, thread_ord_id) => {
-    this.getConnection(connectionId)?.removeCanvasRef(thread_ord_id);
+  removeCanvasRef = (connectionId, channelId) => {
+    this.getConnection(connectionId)?.removeCanvasRef(channelId);
   };
 
   resetConnectionView = (connectionId) => {
@@ -229,9 +244,9 @@ class WebSocketStore {
   };
 
   setChannelName = (connectionId, channelId, name) => {
-    console.log(`Setting channel name for connection ${connectionId}, channel ${channelId}: ${name}`);
+    console.log(`Setting channel name for connection ${connectionId}, channel ${JSON.stringify(channelId)}: ${name}`);
     this.sendMessage(JSON.stringify({
-      "SetChannelName": {
+      "SetChannelId": {
         "conn_id": connectionId,
         "channel_id": channelId,
         "name": name

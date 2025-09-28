@@ -1,17 +1,28 @@
 import { observer } from 'mobx-react-lite';
 import { useEffect, useRef, useState } from 'react';
 
-const EditableThreadName = observer(({ store, connectionId, thread }) => {
+const EditableThreadName = observer(({ store, connectionId, channel }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const inputRef = useRef(null);
-  
+
   const connection = store.getConnection(connectionId);
-  const threadName = connection?.getThreadName(thread.thread_ord_id) || '';
-  const displayName = threadName || `Thread ${thread.thread_ord_id}`;
+  const channelName = connection?.getThreadName(channel.channelId) || '';
+
+  // Generate default display name based on channel type
+  const getDefaultName = () => {
+    if (channel.channelId.Thread !== undefined) {
+      return `Thread ${channel.channelId.Thread}`;
+    } else if (channel.channelId.External !== undefined) {
+      return `External ${channel.channelId.External}`;
+    }
+    return 'Unknown Channel';
+  };
+
+  const displayName = channelName || getDefaultName();
   
   const startEditing = () => {
-    setEditValue(threadName);
+    setEditValue(channelName);
     setIsEditing(true);
   };
   
@@ -24,8 +35,8 @@ const EditableThreadName = observer(({ store, connectionId, thread }) => {
   
   const handleSave = () => {
     if (connection) {
-      connection.setChannelName(thread.thread_ord_id, editValue);
-      store.setChannelName(connectionId, thread.thread_ord_id, editValue);
+      connection.setChannelName(channel.channelId, editValue);
+      store.setChannelName(connectionId, channel.channelId, editValue);
     }
     setIsEditing(false);
   };
@@ -53,7 +64,7 @@ const EditableThreadName = observer(({ store, connectionId, thread }) => {
         onKeyDown={handleKeyPress}
         onBlur={handleSave}
         className="thread-name-input"
-        placeholder={`Thread ${thread.thread_ord_id}`}
+        placeholder={getDefaultName()}
       />
     );
   }

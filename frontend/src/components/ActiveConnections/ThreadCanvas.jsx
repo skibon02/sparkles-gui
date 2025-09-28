@@ -3,21 +3,21 @@ import { useEffect, useRef } from 'react';
 import trace from "../../trace.js";
 import cursorStore from '../../stores/CursorStore.js';
 
-const ThreadCanvas = observer(({ store, connectionId, thread }) => {
+const ThreadCanvas = observer(({ store, connectionId, channel, isExternal = false }) => {
   let s = trace.start();
   const canvasRef = useRef(null);
 
   useEffect(() => {
     if (canvasRef.current) {
-      store.setCanvasRef(connectionId, thread.thread_ord_id, canvasRef.current);
+      store.setCanvasRef(connectionId, channel.channelId, canvasRef.current);
     }
 
     return () => {
-      store.removeCanvasRef(connectionId, thread.thread_ord_id);
+      store.removeCanvasRef(connectionId, channel.channelId);
     };
-  }, [store, connectionId, thread.thread_ord_id]);
+  }, [store, connectionId, channel.channelId]);
 
-  const canvasHeight = thread.getCanvasHeight();
+  const canvasHeight = channel.getCanvasHeight();
 
   const handleMouseMove = (e) => {
     if (!canvasRef.current) return;
@@ -28,13 +28,13 @@ const ThreadCanvas = observer(({ store, connectionId, thread }) => {
     
     // Update global cursor position (screen coordinates)
     cursorStore.setPosition(e.clientX, e.clientY);
-    cursorStore.setActiveCanvas(canvasRef.current, connectionId, thread.thread_ord_id);
+    cursorStore.setActiveCanvas(canvasRef.current, connectionId, channel.channelId);
     
     // Read pixel color from WebGL and lookup event name
     const connection = store.getConnection(connectionId);
     if (connection) {
-      const pixelColor = connection.threadStore.readPixelColor(thread.thread_ord_id, canvasX, canvasY);
-      const eventName = connection.threadStore.getEventNameByColor(thread.thread_ord_id, pixelColor.r, pixelColor.g, pixelColor.b);
+      const pixelColor = connection.threadStore.readPixelColor(channel.channelId, canvasX, canvasY);
+      const eventName = connection.threadStore.getEventNameByColor(channel.channelId, pixelColor.r, pixelColor.g, pixelColor.b);
       cursorStore.setPixelColor(pixelColor.r, pixelColor.g, pixelColor.b, pixelColor.a, eventName);
     }
   };
@@ -50,7 +50,7 @@ const ThreadCanvas = observer(({ store, connectionId, thread }) => {
   let res = (
     <canvas
       ref={canvasRef}
-      className="connection-canvas"
+      className={`connection-canvas ${isExternal ? 'external-canvas' : ''}`}
       style={{ '--canvas-height': `${canvasHeight}px` }}
       onMouseMove={handleMouseMove}
       onMouseEnter={handleMouseEnter}
