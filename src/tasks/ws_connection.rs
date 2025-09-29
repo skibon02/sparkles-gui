@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
@@ -8,7 +9,7 @@ use tokio::time::interval;
 use crate::shared::WsConnection;
 use crate::tasks::sparkles_connection::{ChannelId, EventsSkipStats};
 use crate::tasks::sparkles_connection::storage::{GeneralEventNameId, StorageStats};
-use crate::tasks::web_server::DiscoveryShared;
+use crate::tasks::web_server::{DiscoveryShared, SparklesAddress};
 
 pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, mut conn: WsConnection) -> anyhow::Result<()> {
     info!("New WebSocket connection: {}", conn.id());
@@ -42,7 +43,29 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                                 Ok(msg_to_server) => {
                                     match msg_to_server {
                                         MessageToServer::Connect { addr } => {
-                                            match conn.connect(addr).await? {
+                                            let addr = SparklesAddress::Udp(addr);
+                                            match conn.connect(addr.clone()).await? {
+                                                Ok(id) => {
+                                                    send_websocket(&mut socket, MessageFromServer::Connected { id, addr }).await?;
+                                                }
+                                                Err(msg) => {
+                                                    let _ = send_websocket(&mut socket, MessageFromServer::ConnectError(msg.to_string())).await;
+                                                }
+                                            }
+                                        }
+                                        MessageToServer::OpenFile { path } => {
+                                            // validate path to be in the discovered files list
+                                            let is_valid = {
+                                                let guard = shared_data.0.lock();
+                                                guard.discovered_files.contains(&path)
+                                            };
+                                            if !is_valid {
+                                                let _ = send_websocket(&mut socket, MessageFromServer::ConnectError("File not in discovered files list".into())).await;
+                                                continue;
+                                            }
+
+                                            let addr = SparklesAddress::File(path);
+                                            match conn.connect(addr.clone()).await? {
                                                 Ok(id) => {
                                                     send_websocket(&mut socket, MessageFromServer::Connected { id, addr }).await?;
                                                 }
@@ -74,6 +97,16 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                                                 }
                                             }
                                         }
+                                        MessageToServer::Disconnect { conn_id } => {
+                                            match conn.disconnect(conn_id).await {
+                                                Ok(_) => {
+                                                    info!("Connection {} disconnected", conn_id);
+                                                }
+                                                Err(e) => {
+                                                    warn!("Failed to disconnect connection {}: {}", conn_id, e);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -102,9 +135,37 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                 };
             }
             _ = discover_list_ticker.tick() => {
-                let clients = shared_data.0.lock().discovered_clients.clone();
-                let msg = MessageFromServer::DiscoveredClients {clients};
+                // Collect all data from shared state
+                let (discovered_clients, discovered_files, active_connections) = {
+                    let guard = shared_data.0.lock();
+                    (
+                        guard.discovered_clients.clone(),
+                        guard.discovered_files.clone(),
+                        guard.active_connections.clone()
+                    )
+                };
 
+                // Build clients with connection status
+                let clients: Vec<DiscoveredClient> = discovered_clients
+                    .into_iter()
+                    .map(|addresses| {
+                        let connected = addresses.iter().any(|addr| {
+                            active_connections.contains(&SparklesAddress::Udp(*addr))
+                        });
+                        DiscoveredClient { addresses, connected }
+                    })
+                    .collect();
+
+                // Build files with connection status
+                let files: Vec<DiscoveredFile> = discovered_files
+                    .into_iter()
+                    .map(|path| {
+                        let connected = active_connections.contains(&SparklesAddress::File(path.clone()));
+                        DiscoveredFile { path, connected }
+                    })
+                    .collect();
+
+                let msg = MessageFromServer::DiscoveredClients { clients, files };
                 let _ = send_websocket(&mut socket, msg).await;
             }
             _ = active_connections_ticker.tick() => {
@@ -211,6 +272,9 @@ pub enum MessageToServer {
     Connect {
         addr: SocketAddr,
     },
+    OpenFile {
+        path: PathBuf,
+    },
     RequestNewRange {
         conn_id: u32,
         start: u64,
@@ -221,27 +285,43 @@ pub enum MessageToServer {
         channel_id: ChannelId,
         name: String,
     },
+    Disconnect {
+        conn_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ActiveConnectionInfo {
     id: u32,
-    addr: SocketAddr,
+    addr: SparklesAddress,
     stats: StorageStats,
     channel_names: HashMap<String, String>,
     event_names: HashMap<String, HashMap<GeneralEventNameId, String>>,
     online: bool,
 }
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct DiscoveredClient {
+    pub addresses: Vec<SocketAddr>,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiscoveredFile {
+    pub path: std::path::PathBuf,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum MessageFromServer {
     DiscoveredClients {
-        clients: Vec<Vec<SocketAddr>>,
+        clients: Vec<DiscoveredClient>,
+        files: Vec<DiscoveredFile>,
     },
     ActiveConnections(Vec<ActiveConnectionInfo>),
     ConnectError(String),
     Connected {
         id: u32,
-        addr: SocketAddr,
+        addr: SparklesAddress,
     },
 
     Addressed {

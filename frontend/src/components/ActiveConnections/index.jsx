@@ -83,12 +83,16 @@ const ActiveConnections = observer(({ store }) => {
           return (
           <div key={connection.id} className={`connection-cont ${!isOnline ? 'connection-offline' : ''}`}>
             <div className="connection-header">
-              <span className="addr">ID: {connection.id} - {connection.addr}</span>
+              <span className="addr">ID: {connection.id} - {
+                connection.addr.Udp ? connection.addr.Udp :
+                connection.addr.File ? connection.addr.File :
+                JSON.stringify(connection.addr)
+              }</span>
               <div>
                 {(() => {
                   const connectionObj = store.getConnection(connection.id);
                   if (!connectionObj || !connectionObj.isOnline) return null;
-                  
+
                   return (
                     <div className="scroll-btn-container">
                       <button
@@ -115,6 +119,13 @@ const ActiveConnections = observer(({ store }) => {
                   Reset View
                 </button>
               </div>
+              <button
+                className="disconnect-btn"
+                onClick={() => store.disconnectClient(connection.id)}
+                title="Disconnect"
+              >
+                X
+              </button>
             </div>
             <div className="connection-body">
               <div

@@ -1,4 +1,5 @@
 use std::{thread};
+use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use log::{error, info};
@@ -37,7 +38,7 @@ impl DiscoverTask {
         'outer: loop {
             let discovered_clients: Vec<_> = discovery_wrapper.discover()?.into_values().collect();
             if discovered_clients != clients_prev {
-                info!("Discovered clients: ");
+                info!("Discovered UDP clients: ");
                 for client in discovered_clients.iter() {
                     let addrs: Vec<_> = client.iter().map(|a| format!("{a}")).collect();
                     info!("- {}", addrs.join(", "))
@@ -45,8 +46,13 @@ impl DiscoverTask {
                 info!("");
             }
             clients_prev = discovered_clients.clone();
-
             self.shared_data.0.lock().discovered_clients = discovered_clients.clone();
+
+            if let Ok(trace_files) = discover_trace_files().inspect_err(|e| {
+                error!("Error discovering trace files: {e:?}");
+            }) {
+                self.shared_data.0.lock().discovered_files = trace_files;
+            }
 
             for i in 0..10 {
                 if self.shutdown.is_shutdown() {
@@ -59,4 +65,22 @@ impl DiscoverTask {
 
         Ok(())
     }
+}
+
+fn discover_trace_files() -> anyhow::Result<Vec<PathBuf>> {
+    // read directory `trace`
+    let mut traces = vec![];
+    let trace_dir = std::env::current_dir()?.join("trace");
+    if trace_dir.is_dir() {
+        for entry in std::fs::read_dir(trace_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "sprk") {
+                let relative_path = PathBuf::from("trace").join(entry.file_name());
+                traces.push(relative_path);
+            }
+        }
+    }
+
+    Ok(traces)
 }

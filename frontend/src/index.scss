@@ -54,6 +54,12 @@ $btn-lock-unlocked: (
     shadow: #1a5c2b
 );
 
+$btn-disconnect: (
+    bg: #dc3545,
+    hover: #c82333,
+    shadow: #a01c29
+);
+
 // Mixins
 @mixin text-shadow($opacity: 0.3) {
     text-shadow: .05em .05em 0 rgba(0, 0, 0, $opacity);
@@ -147,20 +153,27 @@ body {
     @include button-variant($btn-standard);
 }
 
+.disconnect-btn {
+    @include button-variant($btn-disconnect);
+    padding: .3em .5em;
+    font-size: 1em;
+    font-weight: bold;
+    min-width: auto;
+}
+
 
 .discovered-client {
-    margin-top: 2em;
+    margin-top: 1em;
     padding-left: .6em;
     padding-bottom: .3em;
     border-bottom: 2px solid $main;
-    
+
     @include media.media(max-width, (
         f: 22em,
         rmob: 16em,
     ));
 }
-.discovered-client > div {
-    display: flex;
+.discovered-client > .client-group {
     margin-bottom: .1em;
 }
 
@@ -172,12 +185,4 @@ body {
 
     color: $accent;
     font-weight: 400;
-}
-
-.discovered-clients {
-    /* Discovered clients container */
-}
-
-.active-clients {
-    /* Active clients container */
 }

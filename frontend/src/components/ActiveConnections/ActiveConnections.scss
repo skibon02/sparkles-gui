@@ -17,6 +17,11 @@ $marker-text: #95d1cd;
     margin-left: .3em;
 }
 
+.disconnect-btn {
+    margin-left: .3em;
+    font-weight: normal;
+}
+
 .scroll-btn-container {
     display: inline-flex;
     margin-left: .3em;
@@ -75,6 +80,10 @@ $marker-text: #95d1cd;
             color: #999;
         }
     }
+}
+
+.connection-header {
+    overflow-x: hidden;
 }
 
 .connection-header,

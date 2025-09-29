@@ -7,6 +7,7 @@ use sparkles_parser::EventNameId;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use crate::tasks::sparkles_connection::{ChannelId, EventsSkipStats};
 use crate::tasks::sparkles_connection::storage::{GeneralEventNameId, StorageStats};
+use crate::tasks::web_server::SparklesAddress;
 
 #[derive(Clone)]
 pub struct SparklesWebsocketShared {
@@ -14,7 +15,7 @@ pub struct SparklesWebsocketShared {
 }
 
 pub struct SparklesWebsocketSharedInner {
-    sparkles_connections: HashMap<u32, (UnboundedSender<(u32, WsToSparklesMessage)>, SocketAddr)>,
+    sparkles_connections: HashMap<u32, (UnboundedSender<(u32, WsToSparklesMessage)>, SparklesAddress)>,
     ws_connections: HashMap<u32, UnboundedSender<(u32, SparklesToWsMessage)>>,
     disconnected_connections: HashSet<u32>, // Track disconnected connections
 
@@ -48,17 +49,30 @@ impl SparklesWebsocketShared {
         }
     }
 
-    pub fn new_sparkles_connection(&self, addr: SocketAddr) -> SparklesConnection {
+    pub fn new_sparkles_connection(&self, addr: SparklesAddress) -> SparklesConnection {
         let (sender, receiver) = unbounded_channel();
         let mut guard = self.inner.lock();
         let id = guard.new_sparkles_connection_id;
         guard.new_sparkles_connection_id += 1;
-        guard.sparkles_connections.insert(id, (sender, addr));
+        guard.sparkles_connections.insert(id, (sender, addr.clone()));
         SparklesConnection {
             senders: self.clone(),
             receiver,
             id,
             addr
+        }
+    }
+    
+    pub fn sparkles_connection_addr(&self, id: u32) -> Option<SparklesAddress> {
+        let guard = self.inner.lock();
+        guard.sparkles_connections.get(&id).map(|(_, addr)| addr.clone())
+    }
+    pub fn send_to_sparkles_connection(&self, id: u32, msg: WsToSparklesMessage) -> anyhow::Result<()> {
+        let guard = self.inner.lock();
+        if let Some((sender, _)) = guard.sparkles_connections.get(&id) {
+            sender.send((u32::MAX, msg)).map_err(|e| anyhow::anyhow!("Failed to send message: {}", e))
+        } else {
+            Err(anyhow::anyhow!("No connection with ID {}", id))
         }
     }
 
@@ -88,21 +102,21 @@ impl SparklesWebsocketShared {
         guard.control_msg_tx.send(msg).map_err(|e| anyhow::anyhow!("Failed to send control message: {}", e))
     }
 
-    pub fn active_sparkles_connections(&self) -> Vec<(u32, SocketAddr)> {
+    pub fn active_sparkles_connections(&self) -> Vec<(u32, SparklesAddress)> {
         let guard = self.inner.lock();
         guard.sparkles_connections.iter()
-            .map(|(&id, &(ref _sender, addr))| (id, addr))
+            .map(|(&id, (_sender, addr))| (id, addr.clone()))
             .collect()
     }
     
-    pub fn all_sparkles_connections(&self) -> Vec<(u32, SocketAddr, bool)> {
+    pub fn all_sparkles_connections(&self) -> Vec<(u32, SparklesAddress, bool)> {
         let guard = self.inner.lock();
         let mut connections = Vec::new();
         
         // Add online connections
-        for (&id, &(ref _sender, addr)) in guard.sparkles_connections.iter() {
+        for (&id, (_sender, addr)) in guard.sparkles_connections.iter() {
             let online = !guard.disconnected_connections.contains(&id);
-            connections.push((id, addr, online));
+            connections.push((id, addr.clone(), online));
         }
         
         connections
@@ -153,11 +167,17 @@ impl WsConnection {
         self.control_msg_tx.send(msg).map_err(|e| anyhow::anyhow!("Failed to send control message: {}", e))
     }
 
-    pub async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Result<u32, String>> {
+    pub async fn connect(&self, addr: SparklesAddress) -> anyhow::Result<Result<u32, String>> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let msg = WsControlMessage::Connect { addr, resp: sender };
         self.send_control_message(msg)?;
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
+    }
+
+    pub async fn disconnect(&self, id: u32) -> anyhow::Result<()> {
+        let msg = WsControlMessage::Disconnect { id };
+        self.send_control_message(msg)?;
+        Ok(())
     }
 
     pub async fn get_channel_names(&mut self, id: u32) -> anyhow::Result<HashMap<ChannelId, String>> {
@@ -214,7 +234,7 @@ pub struct SparklesConnection {
     senders: SparklesWebsocketShared,
     receiver: UnboundedReceiver<(u32, WsToSparklesMessage)>,
     id: u32,
-    addr: SocketAddr,
+    addr: SparklesAddress,
 }
 
 impl Deref for SparklesConnection {
@@ -265,8 +285,11 @@ impl Drop for SparklesConnection {
 #[derive(Debug)]
 pub enum WsControlMessage {
     Connect {
-        addr: SocketAddr,
+        addr: SparklesAddress,
         resp: tokio::sync::oneshot::Sender<Result<u32, String>>
+    },
+    Disconnect {
+        id: u32,
     },
 }
 
@@ -300,5 +323,6 @@ pub enum WsToSparklesMessage {
     GetStorageStats {
         resp: tokio::sync::oneshot::Sender<StorageStats>,
     },
+    Disconnect,
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::WebSocket;
@@ -15,7 +16,14 @@ use crate::util::ShutdownSignal;
 #[derive(Debug, Default)]
 pub(crate) struct SharedData {
     pub discovered_clients: Vec<Vec<SocketAddr>>,
-    pub active_connections: HashSet<SocketAddr>,
+    pub discovered_files: Vec<PathBuf>,
+    pub active_connections: HashSet<SparklesAddress>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+pub enum SparklesAddress {
+    Udp(SocketAddr),
+    File(PathBuf),
 }
 
 #[derive(Clone)]

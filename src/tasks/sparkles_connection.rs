@@ -2,33 +2,32 @@ pub mod storage;
 pub mod event_skipper;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 use log::{debug, error, info, warn};
 use sparkles_parser::packet_decoder::PacketDecoder;
 use sparkles_parser::parsed::{ParsedEvent, ParsedExternalEvent};
-use sparkles_parser::{EventNameId, SparklesParser, SparklesParserEvent};
-use sparkles_parser::parser::external_parser::{ExternalEventNamesStore, ExternalParserEvent};
-use sparkles_parser::parser::thread_parser::{EventNamesStore, ThreadParserEvent};
+use sparkles_parser::{SparklesParser, SparklesParserEvent};
+use sparkles_parser::parser::external_parser::ExternalParserEvent;
+use sparkles_parser::parser::thread_parser::ThreadParserEvent;
 use tokio::select;
 use crate::shared::{SparklesConnection, WsToSparklesMessage};
 use crate::tasks::sparkles_connection::storage::{ClientStorage, GeneralEventNameId, GeneralEventNamesStore, StoredInstantEvent};
 use crate::tasks::sparkles_connection::event_skipper::EventSkippingProcessor;
+use crate::tasks::web_server::SparklesAddress;
 
-pub fn spawn_conn_handler(addr: SocketAddr, conn: SparklesConnection) {
+pub fn spawn_conn_handler(addr: SparklesAddress, conn: SparklesConnection) {
     let (msg_tx, msg_rx) = tokio::sync::mpsc::channel(100);
     let client_storage = ClientStorage::new(msg_rx);
 
-    spawn_connection(addr, msg_tx);
+    spawn_connection(addr.clone(), msg_tx);
 
     let _ = tokio::spawn(async move {
-        if let Err(e) = run(addr, conn, client_storage).await {
+        if let Err(e) = run(addr.clone(), conn, client_storage).await {
             error!("Error running Sparkles connection: {e}");
         }
         else {
-            info!("Sparkles connection handler for {addr} finished successfully");
+            info!("Sparkles connection handler for {addr:?} finished successfully");
         }
     });
 }
@@ -207,7 +206,7 @@ struct ActiveRangeRequest {
     end: u64,
 }
 
-async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: ClientStorage) -> anyhow::Result<()> {
+async fn run(addr: SparklesAddress, mut conn: SparklesConnection, mut storage: ClientStorage) -> anyhow::Result<()> {
     let mut active_sending_requests: HashMap<u32, ActiveRangeRequest> = HashMap::new();
     let (mut dummy_tx, _dummy_rx) = tokio::sync::mpsc::channel(1);
 
@@ -269,6 +268,10 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                         resp
                     } => {
                         let _ = resp.send(storage.get_storage_stats());
+                    }
+                    WsToSparklesMessage::Disconnect => {
+                        info!("Disconnecting Sparkles connection to {addr:?}");
+                        return Ok(());
                     }
                 }
             },
@@ -479,7 +482,7 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
                     total_range,
                 };
 
-                debug!("Connection manager: sending range request response to {} for channel {:?}: start={}, end={}, instant data size={}, local range data size={}, cross-thread range data size={}. Skipped: instant {}/{}, range {}/{}",
+                debug!("Connection manager: sending range request response to {:?} for channel {:?}: start={}, end={}, instant data size={}, local range data size={}, cross-thread range data size={}. Skipped: instant {}/{}, range {}/{}",
                     addr, channel_id, start, end, buf.len(), range_buf.len(), foreign_range_buf.len(), skipped_instant, total_instant, skipped_range, total_range);
                 #[cfg(feature = "self-tracing")]
                 let g4 = sparkles::range_event_start!("send response");
@@ -488,12 +491,20 @@ async fn run(addr: SocketAddr, mut conn: SparklesConnection, mut storage: Client
         }
     }
 }
-fn spawn_connection(addr: SocketAddr, events_tx: tokio::sync::mpsc::Sender<SparklesConnectionMessage>) {
+fn spawn_connection(addr: SparklesAddress, events_tx: tokio::sync::mpsc::Sender<SparklesConnectionMessage>) {
     thread::Builder::new().name(String::from("Sparkles connection")).spawn(move || {
         #[cfg(feature = "self-tracing")]
         let g = sparkles::range_event_start!("Sparkles connection handler thread");
-        let decoder = PacketDecoder::from_socket(addr);
-        info!("Connected to Sparkles at {addr}");
+        let decoder = match addr.clone() {
+            SparklesAddress::Udp(socket_addr) => {
+                PacketDecoder::from_socket(socket_addr)
+            }
+            SparklesAddress::File(path) => {
+                let stream = std::fs::File::open(path).expect("Failed to open trace file");
+                PacketDecoder::from_stream(stream)
+            }
+        };
+        info!("Connected to Sparkles at {addr:?}");
 
         let mut thread_infos = HashMap::new();
         let mut ext_channel_infos = HashMap::new();

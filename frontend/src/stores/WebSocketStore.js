@@ -11,6 +11,7 @@ class WebSocketStore {
   
   // Data state
   discoveredClients = [];
+  discoveredFiles = [];
   activeConnections = [];
   
   // Connection instances
@@ -71,11 +72,13 @@ class WebSocketStore {
         const msg = JSON.parse(event.data);
 
         if (msg.DiscoveredClients !== undefined) {
-          this.discoveredClients = msg.DiscoveredClients.clients;
+          this.discoveredClients = msg.DiscoveredClients.clients || [];
+          this.discoveredFiles = msg.DiscoveredClients.files || [];
         }
         else if (msg.Connected !== undefined) {
           const { id, addr } = msg.Connected;
-          console.log('Connected to client:', id, addr);
+          const addressStr = addr.Udp ? addr.Udp : addr.File ? addr.File : JSON.stringify(addr);
+          console.log('Connected to client:', id, addressStr);
         }
         else if (msg.ConnectError !== undefined) {
           console.error('Connection error:', msg.ConnectError);
@@ -228,6 +231,14 @@ class WebSocketStore {
 
   connectToClient = (addr) => {
     this.sendMessage(JSON.stringify({ "Connect": { "addr": addr } }));
+  };
+
+  openFile = (path) => {
+    this.sendMessage(JSON.stringify({ "OpenFile": { "path": path } }));
+  };
+
+  disconnectClient = (connectionId) => {
+    this.sendMessage(JSON.stringify({ "Disconnect": { "conn_id": connectionId } }));
   };
 
   // Canvas ref methods - direct delegation to connection (now per-channel)
