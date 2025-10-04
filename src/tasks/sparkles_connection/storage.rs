@@ -15,7 +15,7 @@ pub type GeneralEventNamesStore = HashMap<GeneralEventNameId, Arc<str>>;
 
 pub struct ClientStorage {
     pub channel_events: HashMap<ChannelId, ChannelEventsStorage>,
-    pub channel_names: HashMap<ChannelId, String>,
+    pub channel_names: HashMap<ChannelId, Arc<str>>,
     pub msg_rx: Receiver<SparklesConnectionMessage>,
 
     pub conn_timestamps: Option<ConnectionTimestamps>,

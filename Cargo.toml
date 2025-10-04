@@ -11,7 +11,7 @@ serde_json = "1.0.140"
 simple_logger = "5.0.0"
 tokio = { version = "1.46.1", features = ["time", "net", "rt-multi-thread", "macros", "tracing"] }
 tower-http = { version = "0.6.6", features = ["fs"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
 ctrlc = "3.4.7"
 anyhow = "1.0.98"
 parking_lot = "0.12.4"
@@ -30,5 +30,5 @@ sparkles-macro = { path= "../sparkles/sparkles-macro"}
 sparkles-parser = { path= "../sparkles/sparkles-parser"}
 
 [features]
-default = ["self-tracing"]
+default = []
 self-tracing = ["sparkles"]

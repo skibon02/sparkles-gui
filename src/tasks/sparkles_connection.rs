@@ -2,6 +2,7 @@ pub mod storage;
 pub mod event_skipper;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 use log::{debug, error, info, warn};
@@ -506,40 +507,21 @@ fn spawn_connection(addr: SparklesAddress, events_tx: tokio::sync::mpsc::Sender<
         };
         info!("Connected to Sparkles at {addr:?}");
 
-        let mut thread_infos = HashMap::new();
-        let mut ext_channel_infos = HashMap::new();
         SparklesParser::new().parse_to_end(decoder, move |evt| {
             match evt {
+                SparklesParserEvent::ThreadParserEvent(ThreadParserEvent::NewThreadName(thread_name), thread_info) => {
+                    let id = thread_info.thread_ord_id;
+
+                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
+                        channel_id: ChannelId::Thread(id),
+                        thread_name: thread_name.clone(),
+                    }).unwrap();
+                }
                 SparklesParserEvent::ThreadParserEvent(ThreadParserEvent::NewEvents(events), thread_info) => {
                     let id = thread_info.thread_ord_id;
 
                     #[cfg(feature = "self-tracing")]
                     sparkles::instant_event!("got new events");
-
-                    // check/update thread name
-                    if let Some(thread_name) = &thread_info.thread_name {
-                        let entry = thread_infos.entry(id);
-                        match entry {
-                            std::collections::hash_map::Entry::Vacant(e) => {
-                                e.insert(thread_name.clone());
-                                events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
-                                    channel_id: ChannelId::Thread(id),
-                                    thread_name: thread_name.clone(),
-                                }).unwrap();
-                            },
-                            std::collections::hash_map::Entry::Occupied(mut e) => {
-                                let existing_thread_name = e.get_mut();
-                                if existing_thread_name != thread_name {
-                                    *existing_thread_name = thread_name.clone();
-                                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
-                                        channel_id: ChannelId::Thread(id),
-                                        thread_name: thread_name.clone(),
-                                    }).unwrap();
-                                }
-                            }
-                        }
-                    }
-
 
                     // send new events
                     events_tx.blocking_send(SparklesConnectionMessage::Events {
@@ -547,33 +529,16 @@ fn spawn_connection(addr: SparklesAddress, events_tx: tokio::sync::mpsc::Sender<
                         events,
                     }).unwrap();
                 }
-                SparklesParserEvent::ExternalParserEvent(ExternalParserEvent::NewEvents(events), info) => {
+                SparklesParserEvent::ExternalParserEvent(ExternalParserEvent::NewChannelName(name), info) => {
                     let id = info.ext_ord_id;
 
-                    // check/update channel name
-                    if let Some(name) = info.channel_name.clone() {
-                        let entry = ext_channel_infos.entry(id);
-
-                        match entry {
-                            std::collections::hash_map::Entry::Vacant(e) => {
-                                e.insert(name.clone());
-                                events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
-                                    channel_id: ChannelId::External(id),
-                                    thread_name: name.to_string(),
-                                }).unwrap();
-                            },
-                            std::collections::hash_map::Entry::Occupied(mut e) => {
-                                let existing_name = e.get_mut();
-                                if existing_name.as_ref() != name.as_ref() {
-                                    *existing_name = name.clone();
-                                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
-                                        channel_id: ChannelId::External(id),
-                                        thread_name: name.to_string(),
-                                    }).unwrap();
-                                }
-                            }
-                        }
-                    }
+                    events_tx.blocking_send(SparklesConnectionMessage::UpdateChannelName {
+                        channel_id: ChannelId::External(id),
+                        thread_name: name.clone(),
+                    }).unwrap();
+                }
+                SparklesParserEvent::ExternalParserEvent(ExternalParserEvent::NewEvents(events), info) => {
+                    let id = info.ext_ord_id;
 
                     // send event names
                     events_tx.blocking_send(SparklesConnectionMessage::ExternalEvents {
@@ -611,7 +576,7 @@ pub enum SparklesConnectionMessage {
     },
     UpdateChannelName {
         channel_id: ChannelId,
-        thread_name: String,
+        thread_name: Arc<str>,
     },
     UpdateChannelEventNames {
         channel_id: ChannelId,
@@ -623,15 +588,6 @@ pub enum SparklesConnectionMessage {
 pub enum ChannelId {
     Thread(u64),
     External(u32),
-}
-
-impl ChannelId {
-    pub fn general_id(&self) -> u64 {
-        match self {
-            ChannelId::Thread(id) => *id,
-            ChannelId::External(id) => *id as u64 + u64::MAX >> 1,
-        }
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

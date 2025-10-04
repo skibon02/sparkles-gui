@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
@@ -177,7 +178,7 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                     let channel_names_raw = conn.get_channel_names(id).await.unwrap_or_default();
 
                     // Convert ChannelId keys to strings for JSON serialization
-                    let channel_names: HashMap<String, String> = channel_names_raw
+                    let channel_names: HashMap<String, Arc<str>> = channel_names_raw
                         .iter()
                         .map(|(channel_id, name)| (serde_json::to_string(channel_id).unwrap(), name.clone()))
                         .collect();
@@ -185,9 +186,9 @@ pub async fn handle_socket(mut socket: WebSocket, shared_data: DiscoveryShared, 
                     let mut event_names = HashMap::new();
                     for (&thread_id, _) in &channel_names_raw {
                         if let Ok(names) = conn.get_event_names(id, thread_id).await {
-                            let string_names: HashMap<GeneralEventNameId, String> = names
+                            let string_names: HashMap<GeneralEventNameId, Arc<str>> = names
                                 .into_iter()
-                                .map(|(k, v)| (k, v.to_string()))
+                                .map(|(k, v)| (k, v.clone()))
                                 .collect();
                             let channel_key = serde_json::to_string(&thread_id).unwrap();
                             event_names.insert(channel_key, string_names);
@@ -283,7 +284,7 @@ pub enum MessageToServer {
     SetChannelId {
         conn_id: u32,
         channel_id: ChannelId,
-        name: String,
+        name: Arc<str>,
     },
     Disconnect {
         conn_id: u32,
@@ -295,8 +296,8 @@ pub struct ActiveConnectionInfo {
     id: u32,
     addr: SparklesAddress,
     stats: StorageStats,
-    channel_names: HashMap<String, String>,
-    event_names: HashMap<String, HashMap<GeneralEventNameId, String>>,
+    channel_names: HashMap<String, Arc<str>>,
+    event_names: HashMap<String, HashMap<GeneralEventNameId, Arc<str>>>,
     online: bool,
 }
 #[derive(Debug, Clone, serde::Serialize)]

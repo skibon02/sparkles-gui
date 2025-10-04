@@ -180,14 +180,14 @@ impl WsConnection {
         Ok(())
     }
 
-    pub async fn get_channel_names(&mut self, id: u32) -> anyhow::Result<HashMap<ChannelId, String>> {
+    pub async fn get_channel_names(&mut self, id: u32) -> anyhow::Result<HashMap<ChannelId, Arc<str>>> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let msg = WsToSparklesMessage::GetChannelNames { resp: sender };
         self.send_message(id, msg)?;
         receiver.await.map_err(|e| anyhow::anyhow!("Failed to receive response: {}", e))
     }
 
-    pub async fn set_thread_name(&mut self, id: u32, channel_id: ChannelId, name: String) -> anyhow::Result<()> {
+    pub async fn set_thread_name(&mut self, id: u32, channel_id: ChannelId, name: Arc<str>) -> anyhow::Result<()> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let msg = WsToSparklesMessage::SetChannelName { channel_id, name, resp: sender };
         self.send_message(id, msg)?;
@@ -301,11 +301,11 @@ pub enum SparklesToWsMessage {
 #[derive(Debug)]
 pub enum WsToSparklesMessage {
     GetChannelNames {
-        resp: tokio::sync::oneshot::Sender<HashMap<ChannelId, String>>,
+        resp: tokio::sync::oneshot::Sender<HashMap<ChannelId, Arc<str>>>,
     },
     SetChannelName {
         channel_id: ChannelId,
-        name: String,
+        name: Arc<str>,
         resp: tokio::sync::oneshot::Sender<()>,
     },
     GetEventNames {
