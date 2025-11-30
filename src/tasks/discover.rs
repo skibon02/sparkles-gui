@@ -9,14 +9,16 @@ use crate::util::ShutdownSignal;
 
 pub struct DiscoverTask {
     shutdown: ShutdownSignal,
-    shared_data: DiscoveryShared
+    shared_data: DiscoveryShared,
+    trace_dir: PathBuf,
 }
 
 impl DiscoverTask {
-    pub fn new(shutdown: ShutdownSignal, shared_data: DiscoveryShared) -> Self {
+    pub fn new(shutdown: ShutdownSignal, shared_data: DiscoveryShared, trace_dir: PathBuf) -> Self {
         Self {
             shutdown,
-            shared_data
+            shared_data,
+            trace_dir,
         }
     }
 
@@ -48,7 +50,7 @@ impl DiscoverTask {
             clients_prev = discovered_clients.clone();
             self.shared_data.0.lock().discovered_clients = discovered_clients.clone();
 
-            if let Ok(trace_files) = discover_trace_files().inspect_err(|e| {
+            if let Ok(trace_files) = discover_trace_files(&self.trace_dir).inspect_err(|e| {
                 error!("Error discovering trace files: {e:?}");
             }) {
                 self.shared_data.0.lock().discovered_files = trace_files;
@@ -67,17 +69,21 @@ impl DiscoverTask {
     }
 }
 
-fn discover_trace_files() -> anyhow::Result<Vec<PathBuf>> {
-    // read directory `trace`
+fn discover_trace_files(base_dir: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {
     let mut traces = vec![];
-    let trace_dir = std::env::current_dir()?.join("trace");
+    let base_dir = if base_dir.is_absolute() {
+        base_dir.clone()
+    } else {
+        std::env::current_dir()?.join(base_dir)
+    };
+    let trace_dir = base_dir.join("trace");
+
     if trace_dir.is_dir() {
-        for entry in std::fs::read_dir(trace_dir)? {
+        for entry in std::fs::read_dir(&trace_dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_file() && path.extension().map_or(false, |ext| ext == "sprk") {
-                let relative_path = PathBuf::from("trace").join(entry.file_name());
-                traces.push(relative_path);
+                traces.push(path);
             }
         }
     }
